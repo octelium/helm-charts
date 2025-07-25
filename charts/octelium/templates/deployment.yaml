@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "octelium.fullname" . }}
+  labels:
+    {{- include "octelium.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "octelium.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "octelium.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "octelium.serviceAccountName" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          {{- with .Values.securityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          command: ["octelium"]
+          args:
+            - "connect"
+            {{- if .Values.octelium.assertionIdentityProvider }}
+            - {{- printf "--assertion=%s:k8s" .Values.octelium.assertionIdentityProvider }}
+            {{- end }}
+            {{- range $arg := .Values.octelium.serve }}
+            - "--serve"
+            - {{ $arg | quote }}
+            {{- end }}
+            {{- range $arg := .Values.octelium.args }}
+            - {{ $arg | quote }}
+            {{- end }}
+          env:
+            - name: OCTELIUM_DOMAIN
+              value: {{ .Values.octelium.domain }}
+            {{- if .Values.octelium.authToken }}
+            - name: OCTELIUM_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "octelium.fullname" . }}
+                  key: "data"
+            {{- end }}
+            {{- if .Values.octelium.dev }}
+            - name: OCTELIUM_DEV
+              value: "true"
+            {{- end }}
+            {{- if .Values.octelium.insecureTLS }}
+            - name: OCTELIUM_INSECURE_TLS
+              value: "true"
+            {{- end }}
+            {{- if or .Values.octelium.authToken .Values.octelium.authTokenSecret }}
+            - name: OCTELIUM_LOGOUT
+              value: "true"
+            {{- end }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
