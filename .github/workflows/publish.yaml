@@ -15,6 +15,9 @@ jobs:
       contents: read
       packages: write
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        version: [0.2.0, 0.2, latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -23,7 +26,7 @@ jobs:
         with:
           name: octelium
           repository: ${{ github.repository_owner }}/helm-charts
-          tag: 0.1.0
+          tag: ${{matrix.version}}
           path: charts/octelium
           registry: ghcr.io
           registry_username: ${{ github.repository_owner }}
