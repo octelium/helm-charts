@@ -62,6 +62,13 @@ spec:
                   name: {{ include "octelium.fullname" . }}
                   key: "data"
             {{- end }}
+            {{- if .Values.octelium.authTokenSecret }}
+            - name: OCTELIUM_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.octelium.authTokenSecret | quote }}
+                  key: {{ .Values.octelium.authTokenSecretKey | default "data" | quote }}
+            {{- end }}
             {{- if .Values.octelium.dev }}
             - name: OCTELIUM_DEV
               value: "true"
