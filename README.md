@@ -7,6 +7,18 @@ A minimal `helm install` command should look like:
 helm install my-octelium-chart oci://ghcr.io/octelium/helm-charts/octelium --set octelium.domain=<DOMAIN> --set octelium.authToken=<AUTHENTICATION_TOKEN>
 ```
 
+You can also an authentication token from an existing Kubernetes secret as follows:
+
+```bash
+helm install my-octelium-chart oci://ghcr.io/octelium/helm-charts/octelium --set octelium.domain=<DOMAIN> --set octelium.authTokenSecret=<K8S_SECRET_NAME>
+```
+
+By default, the Kubernetes secret key is assumed to be `data`. You can choose a custom secret key as follows:
+
+```bash
+helm install my-octelium-chart oci://ghcr.io/octelium/helm-charts/octelium --set octelium.domain=<DOMAIN> --set octelium.authTokenSecret=<K8S_SECRET_NAME> authTokenSecretKey=<KEY_NAME>
+```
+
 ## Serving _Services_
 
 
