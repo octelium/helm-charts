@@ -2,7 +2,7 @@ apiVersion: v2
 name: octelium
 description: Connect to your Octelium Clusters and serve remote Kubernetes services for your Cluster
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "0.14.0"
 icon: https://octelium.com/assets/logo-180-DUsurYDp.png
 home: https://octelium.com
