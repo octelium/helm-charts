@@ -3,12 +3,7 @@ permissions:
   contents: read
   packages: write
 on:
-  push:
-    branches:
-      - main
-      - master
-    paths:
-      - "charts/**"
+  workflow_dispatch:
 jobs:
   helm:
     permissions:
