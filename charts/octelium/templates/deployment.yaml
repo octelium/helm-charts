@@ -39,30 +39,34 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["octelium"]
           args:
             - "connect"
-            {{- if .Values.octelium.assertionIdentityProvider }}
-            - {{- printf "--assertion=%s:k8s" .Values.octelium.assertionIdentityProvider }}
+            {{- if and (not .Values.octelium.authToken) (not .Values.octelium.authTokenSecret) .Values.octelium.assertion.enabled }}
+            {{- if .Values.octelium.assertion.audience }}
+            - {{ printf "--assertion=%s:audience=%s" .Values.octelium.assertion.type .Values.octelium.assertion.audience | quote }}
+            {{- else }}
+            - {{ printf "--assertion=%s" .Values.octelium.assertion.type | quote }}
             {{- end }}
-            {{- range $arg := .Values.octelium.serve }}
+            {{- end }}
+            {{- range $svc := .Values.octelium.serve }}
             - "--serve"
-            - {{ $arg | quote }}
+            - {{ $svc | quote }}
             {{- end }}
             {{- range $arg := .Values.octelium.args }}
             - {{ $arg | quote }}
             {{- end }}
           env:
             - name: OCTELIUM_DOMAIN
-              value: {{ .Values.octelium.domain }}
+              value: {{ required "octelium.domain is required" .Values.octelium.domain | quote }}
             {{- if .Values.octelium.authToken }}
             - name: OCTELIUM_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "octelium.fullname" . }}
                   key: "data"
-            {{- end }}
-            {{- if .Values.octelium.authTokenSecret }}
+            {{- else if .Values.octelium.authTokenSecret }}
             - name: OCTELIUM_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -81,14 +85,10 @@ spec:
             - name: OCTELIUM_LOGOUT
               value: "true"
             {{- end }}
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-
-
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

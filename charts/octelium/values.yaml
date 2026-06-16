@@ -11,7 +11,8 @@ image:
   # This sets the pull policy for images.
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "latest"
+  # Leave empty to use the chart appVersion. Avoid pinning to "latest".
+  tag: ""
 
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
@@ -41,6 +42,8 @@ podLabels: {}
 podSecurityContext: {}
   # fsGroup: 2000
 
+# The client needs NET_ADMIN to set up its tunnel interface. Where this is not
+# permitted, it falls back to its userspace implementation when possible.
 securityContext:
   capabilities:
     add: ["NET_ADMIN"]
@@ -63,6 +66,7 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 100
   targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
 
 nodeSelector: {}
 
@@ -72,12 +76,35 @@ affinity: {}
 
 
 octelium:
+  # The Octelium Cluster domain. Required.
   domain: ""
+
+  # An authentication token passed directly. The chart stores it in a Secret
+  # that it creates and manages. Mutually exclusive with authTokenSecret.
   authToken: ""
+
+  # The name of an existing Kubernetes Secret that holds the authentication
+  # token. Takes precedence over authToken when both are set.
   authTokenSecret: ""
-  authTokenSecretKey: ""
+  # The key within authTokenSecret that holds the token.
+  authTokenSecretKey: "data"
+
+  # Enable dev mode. Intended for development and testing.
   dev: false
+  # Disable TLS verification. For testing only; do not use against production Clusters.
   insecureTLS: false
-  assertionIdentityProvider: ""
+
+  # Secret-less authentication using the Cluster's assertion-based IdentityProvider.
+  # Used only when neither authToken nor authTokenSecret is set.
+  assertion:
+    enabled: false
+    # The assertion type as configured on your Cluster. Verify the exact value
+    # against your Octelium docs/CLI (for example the Kubernetes assertion type).
+    type: "kubernetes"
+    # Optional audience override for the assertion.
+    audience: ""
+
+  # Extra arguments passed to `octelium connect`.
   args: []
+  # Services to serve from this cluster.
   serve: []

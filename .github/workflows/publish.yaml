@@ -1,25 +1,84 @@
 name: Helm Publish
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "charts/octelium/**"
+  workflow_dispatch:
+
 permissions:
   contents: read
   packages: write
-on:
-  workflow_dispatch:
+
+concurrency:
+  group: helm-publish
+  cancel-in-progress: false
+
 jobs:
-  helm:
+  publish:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
-      - name: Chart | Push
-        uses: appany/helm-oci-chart-releaser@v0.5.0
-        with:
-          name: octelium
-          repository: ${{ github.repository_owner }}/helm-charts
-          tag: 0.3.0
-          path: charts/octelium
-          registry: ghcr.io
-          registry_username: ${{ github.repository_owner }}
-          registry_password: ${{ secrets.GITHUB_TOKEN }}
+        uses: actions/checkout@v4
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Read chart metadata
+        id: chart
+        run: |
+          set -euo pipefail
+          meta="$(helm show chart charts/octelium)"
+          name="$(printf '%s\n' "$meta" | awk '/^name:/ {print $2; exit}')"
+          version="$(printf '%s\n' "$meta" | awk '/^version:/ {print $2; exit}')"
+          if [ -z "$name" ] || [ -z "$version" ]; then
+            echo "::error::could not read name/version from charts/octelium/Chart.yaml"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Chart: $name $version"
+
+      - name: Lint
+        run: helm lint charts/octelium
+
+      - name: Template smoke test
+        run: |
+          helm template charts/octelium \
+            --set octelium.domain=example.com \
+            --set octelium.authToken=dummy > /dev/null
+
+      - name: Registry login
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Check if already published
+        id: exists
+        run: |
+          set -euo pipefail
+          ref="oci://ghcr.io/${{ github.repository_owner }}/helm-charts/${{ steps.chart.outputs.name }}"
+          if helm show chart "$ref" --version "${{ steps.chart.outputs.version }}" >/dev/null 2>&1; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package and push
+        if: steps.exists.outputs.published == 'false'
+        run: |
+          set -euo pipefail
+          helm package charts/octelium --destination dist
+          helm push \
+            "dist/${{ steps.chart.outputs.name }}-${{ steps.chart.outputs.version }}.tgz" \
+            "oci://ghcr.io/${{ github.repository_owner }}/helm-charts"
+          echo "Published ${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Skip (already published)
+        if: steps.exists.outputs.published == 'true'
+        run: |
+          echo "${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }} is already published; nothing to do." >> "$GITHUB_STEP_SUMMARY"
