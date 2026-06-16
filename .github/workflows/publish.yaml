@@ -33,6 +33,13 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Read chart metadata
         id: chart
         run: |
@@ -56,11 +63,6 @@ jobs:
           helm template charts/octelium \
             --set octelium.domain=example.com \
             --set octelium.authToken=dummy > /dev/null
-
-      - name: Registry login
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Check if already published
         id: exists
