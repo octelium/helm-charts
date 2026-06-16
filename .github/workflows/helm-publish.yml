@@ -5,12 +5,9 @@ on:
     branches: [main]
     paths:
       - "charts/octelium/**"
+      - "artifacthub-repo.yml"
+      - ".github/workflows/helm-publish.yml"
   workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: write
-  id-token: write
 
 concurrency:
   group: helm-publish
@@ -30,15 +27,24 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@v1
+
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
-      - name: Log in to GHCR
+      - name: Log in to GHCR for OCI clients
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to GHCR for Helm
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Read chart metadata
         id: chart
@@ -47,12 +53,19 @@ jobs:
           meta="$(helm show chart charts/octelium)"
           name="$(printf '%s\n' "$meta" | awk '/^name:/ {print $2; exit}')"
           version="$(printf '%s\n' "$meta" | awk '/^version:/ {print $2; exit}')"
+          owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+
           if [ -z "$name" ] || [ -z "$version" ]; then
             echo "::error::could not read name/version from charts/octelium/Chart.yaml"
             exit 1
           fi
+
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "owner=$owner" >> "$GITHUB_OUTPUT"
+          echo "repo=ghcr.io/$owner/helm-charts/$name" >> "$GITHUB_OUTPUT"
+          echo "helm_repo=oci://ghcr.io/$owner/helm-charts/$name" >> "$GITHUB_OUTPUT"
+          echo "helm_push_repo=oci://ghcr.io/$owner/helm-charts" >> "$GITHUB_OUTPUT"
           echo "Chart: $name $version"
 
       - name: Lint
@@ -60,16 +73,31 @@ jobs:
 
       - name: Template smoke test
         run: |
+          set -euo pipefail
           helm template charts/octelium \
             --set octelium.domain=example.com \
             --set octelium.authToken=dummy > /dev/null
+
+      - name: Check Artifact Hub metadata
+        run: |
+          set -euo pipefail
+          test -f artifacthub-repo.yml
+          grep -q '^repositoryID:' artifacthub-repo.yml
+          grep -q '^owners:' artifacthub-repo.yml
+
+      - name: Push Artifact Hub repository metadata
+        run: |
+          set -euo pipefail
+          oras push \
+            "${{ steps.chart.outputs.repo }}:artifacthub.io" \
+            --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+            artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
 
       - name: Check if already published
         id: exists
         run: |
           set -euo pipefail
-          ref="oci://ghcr.io/${{ github.repository_owner }}/helm-charts/${{ steps.chart.outputs.name }}"
-          if helm show chart "$ref" --version "${{ steps.chart.outputs.version }}" >/dev/null 2>&1; then
+          if helm show chart "${{ steps.chart.outputs.helm_repo }}" --version "${{ steps.chart.outputs.version }}" >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
@@ -80,29 +108,40 @@ jobs:
         if: steps.exists.outputs.published == 'false'
         run: |
           set -euo pipefail
+          mkdir -p dist
           helm package charts/octelium --destination dist
           out="$(helm push \
             "dist/${{ steps.chart.outputs.name }}-${{ steps.chart.outputs.version }}.tgz" \
-            "oci://ghcr.io/${{ github.repository_owner }}/helm-charts" 2>&1)"
+            "${{ steps.chart.outputs.helm_push_repo }}" 2>&1)"
           echo "$out"
+
           digest="$(printf '%s\n' "$out" | awk '/[Dd]igest:/ {print $NF; exit}')"
-          if [ -z "$digest" ]; then
-            echo "::error::could not determine pushed digest"
+
+          if ! printf '%s' "$digest" | grep -Eq '^sha256:[a-f0-9]{64}$'; then
+            echo "::error::invalid or missing pushed digest: $digest"
             exit 1
           fi
+
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Sign chart (keyless cosign)
+      - name: Sign chart
         if: steps.exists.outputs.published == 'false'
-        env:
-          COSIGN_YES: "true"
         run: |
           set -euo pipefail
-          cosign sign \
-            "ghcr.io/${{ github.repository_owner }}/helm-charts/${{ steps.chart.outputs.name }}@${{ steps.push.outputs.digest }}"
+          ref="${{ steps.chart.outputs.repo }}@${{ steps.push.outputs.digest }}"
+          cosign sign --yes "$ref"
           echo "Published and signed ${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Skip (already published)
+      - name: Verify chart signature
+        if: steps.exists.outputs.published == 'false'
+        run: |
+          set -euo pipefail
+          ref="${{ steps.chart.outputs.repo }}@${{ steps.push.outputs.digest }}"
+          cosign verify "$ref" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/helm-publish.yml@refs/heads/main"
+
+      - name: Skip
         if: steps.exists.outputs.published == 'true'
         run: |
-          echo "${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }} is already published; nothing to do." >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }} is already published; Artifact Hub metadata was refreshed." >> "$GITHUB_STEP_SUMMARY"
