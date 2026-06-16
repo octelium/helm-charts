@@ -10,6 +10,7 @@ on:
 permissions:
   contents: read
   packages: write
+  id-token: write
 
 concurrency:
   group: helm-publish
@@ -21,12 +22,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Helm
         uses: azure/setup-helm@v4
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
 
       - name: Read chart metadata
         id: chart
@@ -69,14 +74,31 @@ jobs:
           fi
 
       - name: Package and push
+        id: push
         if: steps.exists.outputs.published == 'false'
         run: |
           set -euo pipefail
           helm package charts/octelium --destination dist
-          helm push \
+          out="$(helm push \
             "dist/${{ steps.chart.outputs.name }}-${{ steps.chart.outputs.version }}.tgz" \
-            "oci://ghcr.io/${{ github.repository_owner }}/helm-charts"
-          echo "Published ${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+            "oci://ghcr.io/${{ github.repository_owner }}/helm-charts" 2>&1)"
+          echo "$out"
+          digest="$(printf '%s\n' "$out" | awk '/[Dd]igest:/ {print $NF; exit}')"
+          if [ -z "$digest" ]; then
+            echo "::error::could not determine pushed digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Sign chart (keyless cosign)
+        if: steps.exists.outputs.published == 'false'
+        env:
+          COSIGN_YES: "true"
+        run: |
+          set -euo pipefail
+          cosign sign \
+            "ghcr.io/${{ github.repository_owner }}/helm-charts/${{ steps.chart.outputs.name }}@${{ steps.push.outputs.digest }}"
+          echo "Published and signed ${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Skip (already published)
         if: steps.exists.outputs.published == 'true'
