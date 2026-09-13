@@ -1,0 +1,63 @@
+The Octelium connector "{{ include "octelium.fullname" . }}" has been {{ if .Release.IsInstall }}installed{{ else }}upgraded{{ end }} in the namespace "{{ .Release.Namespace }}".
+
+Cluster domain : {{ .Values.octelium.domain }}
+Image          : {{ include "octelium.image" . }}
+Authentication : {{ if .Values.octelium.auth.assertion.enabled }}assertion ({{ .Values.octelium.auth.assertion.type }}){{ else if .Values.octelium.auth.existingSecret }}Token from the existing Secret "{{ .Values.octelium.auth.existingSecret }}"{{ else }}Token from the chart managed Secret "{{ include "octelium.fullname" . }}"{{ end }}
+
+Watch the connector come up:
+
+  kubectl --namespace {{ .Release.Namespace }} rollout status deployment/{{ include "octelium.fullname" . }}
+  kubectl --namespace {{ .Release.Namespace }} logs -l app.kubernetes.io/instance={{ .Release.Name }} -f
+{{- if .Values.octelium.serveAll }}
+
+Every Service assigned to this User is served to the Cluster.
+{{- else if .Values.octelium.serve }}
+
+Services served to the Cluster:
+{{- range .Values.octelium.serve }}
+  - {{ . }}
+{{- end }}
+{{- end }}
+{{- if .Values.octelium.publish }}
+
+Octelium Services published inside this Kubernetes cluster:
+{{- range .Values.octelium.publish }}
+  - {{ .service }} on port {{ .port }}
+{{- end }}
+{{- if .Values.service.enabled }}
+
+Reach them from other Pods at:
+
+  {{ include "octelium.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local
+{{- else }}
+
+They are only reachable from inside this Pod. Set service.enabled=true to expose
+them to the rest of the Kubernetes cluster.
+{{- end }}
+{{- end }}
+{{- if and .Values.octelium.essh.enabled (not .Values.octelium.essh.listenAddresses) }}
+
+WARNING: eSSH is enabled but octelium.essh.listenAddresses is empty, so it only
+listens on the Pod loopback. Set it to ["0.0.0.0"] to accept in-cluster clients.
+{{- end }}
+{{- if and .Values.octelium.esocks5.enabled (not .Values.octelium.esocks5.listenAddresses) }}
+
+WARNING: eSOCKS5 is enabled but octelium.esocks5.listenAddresses is empty, so it
+only listens on the Pod loopback. Set it to ["0.0.0.0"] to accept in-cluster
+clients.
+{{- end }}
+{{- if .Values.octelium.auth.token }}
+
+WARNING: octelium.auth.token was passed as a plain value, so the Token is stored
+in the Helm release metadata as well as in the Secret. Prefer
+octelium.auth.existingSecret, or assertion based authentication which needs no
+Token at all.
+{{- end }}
+{{- if .Values.octelium.insecureTLS }}
+
+WARNING: octelium.insecureTLS is enabled. TLS verification against the Cluster is
+disabled. Never run this against a production Cluster.
+{{- end }}
+
+Documentation : https://octelium.com/docs
+Chart values  : https://github.com/octelium/helm-charts/tree/main/charts/octelium

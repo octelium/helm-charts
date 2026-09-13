@@ -1,0 +1,9 @@
+octelium:
+  domain: example.com
+  auth:
+    assertion:
+      enabled: true
+      type: kubernetes
+      identityProvider: k8s
+      audience: octelium
+  serveAll: true

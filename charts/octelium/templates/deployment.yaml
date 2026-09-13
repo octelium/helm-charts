@@ -1,19 +1,35 @@
+{{- include "octelium.validateValues" . -}}
+{{- $podAnnotations := dict -}}
+{{- if and .Values.rollOnSecretChange (include "octelium.createsSecret" .) -}}
+{{- $_ := set $podAnnotations "checksum/auth-secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) -}}
+{{- end -}}
+{{- $podAnnotations = merge $podAnnotations .Values.podAnnotations .Values.commonAnnotations -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "octelium.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "octelium.labels" . | nindent 4 }}
+  {{- with (include "octelium.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit }}
+  {{- with .Values.updateStrategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
   {{- end }}
   selector:
     matchLabels:
       {{- include "octelium.selectorLabels" . | nindent 6 }}
   template:
     metadata:
-      {{- with .Values.podAnnotations }}
+      {{- with $podAnnotations }}
       annotations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -28,50 +44,143 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "octelium.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.serviceAccount.automount }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.schedulerName }}
+      schedulerName: {{ . | quote }}
+      {{- end }}
+      {{- with .Values.runtimeClassName }}
+      runtimeClassName: {{ . | quote }}
+      {{- end }}
+      hostNetwork: {{ .Values.hostNetwork }}
+      dnsPolicy: {{ .Values.dnsPolicy | default (ternary "ClusterFirstWithHostNet" "ClusterFirst" .Values.hostNetwork) }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Chart.Name }}
+          image: {{ include "octelium.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- with .Values.securityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
           command: ["octelium"]
           args:
-            - "connect"
-            {{- if and (not .Values.octelium.authToken) (not .Values.octelium.authTokenSecret) .Values.octelium.assertion.enabled }}
-            {{- if .Values.octelium.assertion.audience }}
-            - {{ printf "--assertion=%s:audience=%s" .Values.octelium.assertion.type .Values.octelium.assertion.audience | quote }}
-            {{- else }}
-            - {{ printf "--assertion=%s" .Values.octelium.assertion.type | quote }}
+            - connect
+            {{- if .Values.octelium.auth.assertion.enabled }}
+            - {{ printf "--assertion=%s" (include "octelium.assertionArg" .) | quote }}
+            {{- end }}
+            {{- range .Values.octelium.auth.scopes }}
+            - {{ printf "--scope=%s" . | quote }}
+            {{- end }}
+            {{- if .Values.octelium.serveAll }}
+            - --serve-all
+            {{- end }}
+            {{- range .Values.octelium.serve }}
+            - {{ printf "--serve=%s" . | quote }}
+            {{- end }}
+            {{- range .Values.octelium.publish }}
+            - {{ printf "--publish=%s:%s:%v" .service (default "0.0.0.0" .address) .port | quote }}
+            {{- end }}
+            {{- if .Values.octelium.essh.enabled }}
+            - --essh
+            {{- with .Values.octelium.essh.user }}
+            - {{ printf "--essh-user=%s" . | quote }}
             {{- end }}
             {{- end }}
-            {{- range $svc := .Values.octelium.serve }}
-            - "--serve"
-            - {{ $svc | quote }}
+            {{- if .Values.octelium.esocks5.enabled }}
+            - --esocks5
             {{- end }}
-            {{- range $arg := .Values.octelium.args }}
-            - {{ $arg | quote }}
+            {{- if .Values.octelium.dns.disabled }}
+            - --no-dns
+            {{- end }}
+            {{- if .Values.octelium.dns.full }}
+            - --full-dns
+            {{- end }}
+            {{- if .Values.octelium.dns.local.enabled }}
+            - --localdns
+            {{- end }}
+            {{- with .Values.octelium.dns.local.listenAddress }}
+            - {{ printf "--localdns-addr=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.octelium.network.ipMode }}
+            - {{ printf "--ip-mode=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.octelium.network.tunnelMode }}
+            - {{ printf "--tunnel-mode=%s" . | quote }}
+            {{- end }}
+            {{- with .Values.octelium.network.implementation }}
+            - {{ printf "--implementation=%s" . | quote }}
+            {{- end }}
+            {{- range .Values.octelium.extraArgs }}
+            - {{ . | quote }}
             {{- end }}
           env:
             - name: OCTELIUM_DOMAIN
-              value: {{ required "octelium.domain is required" .Values.octelium.domain | quote }}
-            {{- if .Values.octelium.authToken }}
+              value: {{ .Values.octelium.domain | quote }}
+            - name: OCTELIUM_HOME
+              value: {{ .Values.emptyDirVolumes.octeliumHome.mountPath | quote }}
+            - name: OCTELIUM_CONTAINER_MODE
+              value: "true"
+            {{- if or .Values.octelium.auth.token .Values.octelium.auth.existingSecret }}
             - name: OCTELIUM_AUTH_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ include "octelium.fullname" . }}
-                  key: "data"
-            {{- else if .Values.octelium.authTokenSecret }}
-            - name: OCTELIUM_AUTH_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.octelium.authTokenSecret | quote }}
-                  key: {{ .Values.octelium.authTokenSecretKey | default "data" | quote }}
+                  name: {{ include "octelium.authSecretName" . | quote }}
+                  key: {{ include "octelium.authSecretKey" . | quote }}
+            {{- end }}
+            {{- if .Values.octelium.auth.logout }}
+            - name: OCTELIUM_LOGOUT
+              value: "true"
+            {{- end }}
+            {{- if gt (int .Values.octelium.network.mtu) 0 }}
+            - name: OCTELIUM_MTU
+              value: {{ .Values.octelium.network.mtu | quote }}
+            {{- end }}
+            {{- if gt (int .Values.octelium.network.keepAliveSeconds) 0 }}
+            - name: OCTELIUM_KEEPALIVE
+              value: {{ .Values.octelium.network.keepAliveSeconds | quote }}
+            {{- end }}
+            {{- if .Values.octelium.essh.enabled }}
+            - name: OCTELIUM_ESSH_PORT
+              value: {{ .Values.octelium.essh.port | quote }}
+            {{- with .Values.octelium.essh.listenAddresses }}
+            - name: OCTELIUM_ESSH_IP_ADDRS
+              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- if .Values.octelium.essh.disableSFTP }}
+            - name: OCTELIUM_ESSH_SFTP_DISABLE
+              value: "true"
+            {{- end }}
+            {{- if .Values.octelium.essh.allowAnyEnv }}
+            - name: OCTELIUM_ESSH_ALLOW_ANY_ENV
+              value: "true"
+            {{- end }}
+            {{- end }}
+            {{- if .Values.octelium.esocks5.enabled }}
+            - name: OCTELIUM_ESOCKS5_PORT
+              value: {{ .Values.octelium.esocks5.port | quote }}
+            {{- with .Values.octelium.esocks5.listenAddresses }}
+            - name: OCTELIUM_ESOCKS5_IP_ADDRS
+              value: {{ join "," . | quote }}
+            {{- end }}
             {{- end }}
             {{- if .Values.octelium.dev }}
             - name: OCTELIUM_DEV
@@ -81,14 +190,73 @@ spec:
             - name: OCTELIUM_INSECURE_TLS
               value: "true"
             {{- end }}
-            {{- if or .Values.octelium.authToken .Values.octelium.authTokenSecret }}
-            - name: OCTELIUM_LOGOUT
-              value: "true"
+            {{- with .Values.octelium.extraEnv }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
+          {{- with .Values.octelium.extraEnvFrom }}
+          envFrom:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with (include "octelium.containerPorts" . | trim) }}
+          ports:
+            {{- . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.livenessProbe }}
+          livenessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.readinessProbe }}
+          readinessProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.lifecycle }}
+          lifecycle:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           {{- with .Values.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          volumeMounts:
+            - name: octelium-home
+              mountPath: {{ .Values.emptyDirVolumes.octeliumHome.mountPath | quote }}
+            - name: tmp
+              mountPath: {{ .Values.emptyDirVolumes.tmp.mountPath | quote }}
+            {{- if and .Values.octelium.auth.assertion.enabled (eq .Values.octelium.auth.assertion.type "kubernetes") .Values.octelium.auth.assertion.projectedToken.enabled }}
+            - name: octelium-assertion
+              mountPath: {{ .Values.octelium.auth.assertion.projectedToken.mountPath | quote }}
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      volumes:
+        - name: octelium-home
+          emptyDir: {{- include "octelium.emptyDirSpec" .Values.emptyDirVolumes.octeliumHome | nindent 12 }}
+        - name: tmp
+          emptyDir: {{- include "octelium.emptyDirSpec" .Values.emptyDirVolumes.tmp | nindent 12 }}
+        {{- if and .Values.octelium.auth.assertion.enabled (eq .Values.octelium.auth.assertion.type "kubernetes") .Values.octelium.auth.assertion.projectedToken.enabled }}
+        - name: octelium-assertion
+          projected:
+            defaultMode: 0400
+            sources:
+              - serviceAccountToken:
+                  path: token
+                  expirationSeconds: {{ .Values.octelium.auth.assertion.projectedToken.expirationSeconds }}
+                  {{- with .Values.octelium.auth.assertion.audience }}
+                  audience: {{ . | quote }}
+                  {{- end }}
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -99,5 +267,9 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}

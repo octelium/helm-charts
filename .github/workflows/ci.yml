@@ -1,0 +1,210 @@
+name: CI
+
+permissions: {}
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CHART_DIR: charts/octelium
+  KUBECONFORM_VERSION: v0.8.0
+  KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Set up chart-testing
+        uses: helm/chart-testing-action@6ec842c01de15ebb84c8627d2744a0c2f2755c9f # v2.8.0
+
+      - name: Lint every values set
+        run: |
+          set -euo pipefail
+          for values in "$CHART_DIR"/ci/*-values.yaml; do
+            echo "::group::$values"
+            helm lint --strict "$CHART_DIR" -f "$values"
+            echo "::endgroup::"
+          done
+
+      - name: Lint the chart and enforce a version bump
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: ct lint --config ct.yaml --target-branch "$BASE_REF"
+
+      - name: Check Chart.yaml and README stay in sync
+        run: |
+          set -euo pipefail
+          app_version="$(helm show chart "$CHART_DIR" | awk '/^appVersion:/ {gsub(/"/,"",$2); print $2; exit}')"
+          annotated="$(awk '/image: ghcr.io\/octelium\/octelium:/ {print $0; exit}' "$CHART_DIR/Chart.yaml" | sed 's|.*octelium:||')"
+          if [ "$app_version" != "$annotated" ]; then
+            echo "::error file=$CHART_DIR/Chart.yaml::appVersion is $app_version but the artifacthub.io/images annotation pins $annotated"
+            exit 1
+          fi
+
+  render:
+    name: Render and validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        kubernetes-version: ["1.23.0", "1.27.0", "1.31.0", "1.34.0"]
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Install kubeconform
+        run: |
+          set -euo pipefail
+          curl -fsSL -o kubeconform.tar.gz \
+            "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          echo "${KUBECONFORM_SHA256}  kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf kubeconform.tar.gz kubeconform
+          install -m 0755 kubeconform /usr/local/bin/kubeconform
+
+      - name: Render and validate every values set
+        env:
+          K8S_VERSION: ${{ matrix.kubernetes-version }}
+        run: |
+          set -euo pipefail
+          status=0
+          for values in "$CHART_DIR"/ci/*-values.yaml; do
+            echo "::group::$values"
+            if ! helm template release "$CHART_DIR" --namespace octelium -f "$values" \
+              | kubeconform -strict -summary -verbose \
+                  -kubernetes-version "$K8S_VERSION" \
+                  -schema-location default; then
+              echo "::error file=$values::rendered manifests are invalid for Kubernetes $K8S_VERSION"
+              status=1
+            fi
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+  values:
+    name: Values contract
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      - name: Reject invalid value combinations
+        run: |
+          set -euo pipefail
+
+          expect_failure() {
+            local description="$1"
+            local pattern="$2"
+            shift 2
+            local output
+            if output="$(helm template release "$CHART_DIR" "$@" 2>&1)"; then
+              echo "::error::expected \"$description\" to be rejected but it rendered"
+              return 1
+            fi
+            if ! printf '%s' "$output" | grep -q -- "$pattern"; then
+              echo "::error::\"$description\" failed with an unexpected message"
+              printf '%s\n' "$output" | tail -5
+              return 1
+            fi
+            echo "ok: $description"
+          }
+
+          status=0
+          expect_failure "missing domain" "octelium.domain is required" \
+            --set octelium.auth.token=x || status=1
+          expect_failure "no authentication method" "No authentication method" \
+            --set octelium.domain=example.com || status=1
+          expect_failure "token and existing Secret" "mutually exclusive" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set octelium.auth.existingSecret=s || status=1
+          expect_failure "token and assertion" "single authentication method" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set octelium.auth.assertion.enabled=true || status=1
+          expect_failure "jwt assertion with no source" "requires octelium.auth.assertion.jwt" \
+            --set octelium.domain=example.com --set octelium.auth.assertion.enabled=true \
+            --set octelium.auth.assertion.type=jwt || status=1
+          expect_failure "legacy assertion token without automount" "serviceAccount.automount=true" \
+            --set octelium.domain=example.com --set octelium.auth.assertion.enabled=true \
+            --set octelium.auth.assertion.projectedToken.enabled=false || status=1
+          expect_failure "serve and serveAll" "octelium.serveAll and octelium.serve" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set octelium.serveAll=true --set 'octelium.serve={svc1}' || status=1
+          expect_failure "NET_ADMIN as non-root" "NET_ADMIN is only effective" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set podSecurityContext.runAsNonRoot=true || status=1
+          expect_failure "Service with no ports" "no port is exposed" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set service.enabled=true || status=1
+          expect_failure "unknown value key" "additional properties" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set octelium.authToken=legacy || status=1
+          expect_failure "unknown implementation mode" "implementation" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --set octelium.network.implementation=bogus || status=1
+          exit "$status"
+
+      - name: The Secret is only created by the chart when it owns the Token
+        run: |
+          set -euo pipefail
+          managed="$(helm template release "$CHART_DIR" \
+            --set octelium.domain=example.com --set octelium.auth.token=x \
+            --show-only templates/secret.yaml)"
+          printf '%s' "$managed" | grep -q 'kind: Secret'
+
+          if helm template release "$CHART_DIR" \
+            --set octelium.domain=example.com --set octelium.auth.existingSecret=mine \
+            --show-only templates/secret.yaml >/dev/null 2>&1; then
+            echo "::error::a Secret was rendered even though an existing Secret was given"
+            exit 1
+          fi
+
+      - name: No Token ever lands in a rendered command line
+        run: |
+          set -euo pipefail
+          rendered="$(helm template release "$CHART_DIR" \
+            --set octelium.domain=example.com \
+            --set octelium.auth.token=s3cr3t-sentinel)"
+          if printf '%s' "$rendered" | grep -v 'kind: Secret' | grep -q 'args:.*s3cr3t-sentinel'; then
+            echo "::error::the authentication Token leaked into the container arguments"
+            exit 1
+          fi
+          printf '%s' "$rendered" | grep -q 'secretKeyRef'

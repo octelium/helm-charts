@@ -1,0 +1,4 @@
+octelium:
+  domain: example.com
+  auth:
+    token: ci-dummy-token

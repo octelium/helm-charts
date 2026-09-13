@@ -1,21 +1,62 @@
 apiVersion: v2
 name: octelium
-description: Connect to your Octelium Clusters and serve remote Kubernetes services for your Cluster
+description: Run the Octelium client in Kubernetes to connect Workloads to an Octelium Cluster, publish remote Services in-cluster and serve in-cluster Services to the Cluster
 type: application
-version: 0.6.2
-appVersion: "0.35.0"
+version: 1.0.0
+appVersion: "0.42.0"
+kubeVersion: ">=1.23.0-0"
 icon: https://octelium.com/assets/logo-180-DUsurYDp.png
 home: https://octelium.com
 sources:
   - https://github.com/octelium/octelium
+  - https://github.com/octelium/helm-charts
 keywords:
   - octelium
-  - wireguard
-  - vpn
   - zero-trust
-  - security
+  - ztna
+  - vpn
+  - wireguard
   - quic
+  - networking
+  - security
+  - identity-aware-proxy
+  - remote-access
 maintainers:
   - name: George Badawi
     email: george@octelium.com
     url: https://octelium.com
+annotations:
+  artifacthub.io/category: networking
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/operator: "false"
+  artifacthub.io/prerelease: "false"
+  artifacthub.io/containsSecurityUpdates: "false"
+  artifacthub.io/images: |
+    - name: octelium
+      image: ghcr.io/octelium/octelium:0.42.0
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://octelium.com/docs
+    - name: Chart source
+      url: https://github.com/octelium/helm-charts/tree/main/charts/octelium
+    - name: Octelium source
+      url: https://github.com/octelium/octelium
+    - name: Report an issue
+      url: https://github.com/octelium/octelium/issues
+  artifacthub.io/changes: |
+    - kind: changed
+      description: Reorganized values into octelium.auth, octelium.dns, octelium.network, octelium.essh and octelium.esocks5. See the upgrade notes in the chart README
+    - kind: added
+      description: Published Services (octelium.publish) and an optional Kubernetes Service that exposes them, eSSH and eSOCKS5 in-cluster
+    - kind: added
+      description: Full coverage of the octelium connect options including DNS, tunneling, MTU, keepalive, IP mode, implementation mode and scopes
+    - kind: added
+      description: Optional PodDisruptionBudget, topology spread constraints, extra volumes, init containers and sidecars
+    - kind: changed
+      description: Hardened pod defaults with a read-only root filesystem, all capabilities dropped except NET_ADMIN, no privilege escalation and RuntimeDefault seccomp
+    - kind: changed
+      description: Assertion based authentication now uses an audience bindable projected ServiceAccount token and no longer automounts API credentials
+    - kind: fixed
+      description: The ServiceAccount is no longer created when serviceAccount.create is false
+    - kind: fixed
+      description: Pods now roll automatically when the authentication token Secret changes

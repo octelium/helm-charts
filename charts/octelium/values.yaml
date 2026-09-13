@@ -1,110 +1,318 @@
-# Default values for octelium.
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
+# Default values for the octelium chart.
+# Reference: https://github.com/octelium/helm-charts/tree/main/charts/octelium
 
-# This will set the replicaset count more information can be found here: https://kubernetes.io/docs/concepts/workloads/controllers/replicaset/
-replicaCount: 1
-
-# This sets the container image more information can be found here: https://kubernetes.io/docs/concepts/containers/images/
-image:
-  repository: ghcr.io/octelium/octelium
-  # This sets the pull policy for images.
-  pullPolicy: IfNotPresent
-  # Overrides the image tag whose default is the chart appVersion.
-  # Leave empty to use the chart appVersion. Avoid pinning to "latest".
-  tag: ""
-
-# This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
-imagePullSecrets: []
-# This is to override the chart name.
+# Overrides the chart name used to build resource names.
 nameOverride: ""
+# Overrides the fully qualified resource name entirely.
 fullnameOverride: ""
 
-# This section builds out the service account more information can be found here: https://kubernetes.io/docs/concepts/security/service-accounts/
-serviceAccount:
-  # Specifies whether a service account should be created
-  create: true
-  # Automatically mount a ServiceAccount's API credentials?
-  automount: true
-  # Annotations to add to the service account
+# Labels added to every resource rendered by this chart.
+commonLabels: {}
+# Annotations added to every resource rendered by this chart.
+commonAnnotations: {}
+
+image:
+  # The Octelium client image.
+  repository: ghcr.io/octelium/octelium
+  # Image tag. Defaults to the chart appVersion when empty.
+  tag: ""
+  # Pin the image by digest (e.g. "sha256:..."). Takes precedence over tag.
+  digest: ""
+  # One of Always, IfNotPresent or Never.
+  pullPolicy: IfNotPresent
+
+# Secrets used to pull the image from a private registry.
+# e.g. [{name: my-registry-creds}]
+imagePullSecrets: []
+
+# Number of connectors to run. Each replica is an independent Octelium Session
+# and Device. Ignored when autoscaling.enabled is true.
+replicaCount: 1
+
+# Number of old ReplicaSets retained for rollback.
+revisionHistoryLimit: 10
+
+# Deployment update strategy. Recreate is the default because a rolling update
+# would otherwise run two connectors for the same Device at once.
+updateStrategy:
+  type: Recreate
+
+# Grace period given to the client to tear its tunnel down on shutdown.
+terminationGracePeriodSeconds: 30
+
+octelium:
+  # The Octelium Cluster domain, e.g. "example.com". Required.
+  domain: ""
+
+  auth:
+    # An authentication Token. The chart stores it in a Secret it creates and
+    # manages. Prefer existingSecret or assertion based authentication.
+    token: ""
+
+    # The name of an existing Secret holding the authentication Token.
+    # Mutually exclusive with token.
+    existingSecret: ""
+    # The key inside existingSecret holding the Token.
+    existingSecretKey: "data"
+
+    # Secret-less authentication against an assertion based IdentityProvider.
+    # Mutually exclusive with token and existingSecret.
+    # https://octelium.com/docs/octelium/latest/management/core/identity-providers
+    assertion:
+      enabled: false
+
+      # One of: kubernetes, jwt, azure, github-actions.
+      type: "kubernetes"
+
+      # Name or UID of the IdentityProvider to authenticate against. Only needed
+      # when the Cluster has more than one IdentityProvider of this type.
+      identityProvider: ""
+
+      # Audience bound into the assertion. For the kubernetes type this is the
+      # audience of the projected ServiceAccount token and must match the
+      # audience configured on the Cluster IdentityProvider. Leave empty to use
+      # the Kubernetes API server audience.
+      audience: ""
+
+      # Used by the kubernetes assertion type.
+      projectedToken:
+        # Project a short lived, audience bound ServiceAccount token instead of
+        # relying on the legacy automounted API credentials. Keep this enabled
+        # unless the Cluster IdentityProvider requires the default token.
+        enabled: true
+        # Token lifetime in seconds. kubelet rotates the token before expiry.
+        expirationSeconds: 3600
+        # Directory the token is projected into.
+        mountPath: "/var/run/secrets/octelium.com/serviceaccount"
+
+      # Used by the jwt assertion type. Set exactly one of file or env.
+      jwt:
+        # Path of a file holding the JWT, usually provided via extraVolumes.
+        file: ""
+        # Name of an environment variable holding the JWT.
+        env: ""
+
+    # Restrict the Session to a subset of Services and APIs, in the same spirit
+    # as OAuth2 scopes. e.g. ["service:svc1.ns1", "service:ns2/*"]
+    scopes: []
+
+    # Log the Session out when the client shuts down instead of leaving it
+    # dangling on the Cluster until it expires.
+    logout: true
+
+  # Serve in-cluster Services to the Octelium Cluster.
+  # e.g. ["svc1", "svc2.ns1"]
+  serve: []
+  # Serve every Service assigned to this User. Mutually exclusive with serve.
+  serveAll: false
+
+  # Publish remote Octelium Services on this Pod so that in-cluster Workloads
+  # can reach them. Set service.enabled to expose them through a Kubernetes
+  # Service. address defaults to 0.0.0.0 so other Pods can connect.
+  # e.g.
+  #   - service: svc1
+  #     port: 8080
+  #   - service: svc2.ns1
+  #     port: 9090
+  #     address: 0.0.0.0
+  #     name: svc2
+  publish: []
+
+  # Embedded SSH server.
+  essh:
+    enabled: false
+    # Force a host user for eSSH sessions. Only works when running as root.
+    user: ""
+    port: 22022
+    # Addresses the eSSH server listens on. e.g. ["0.0.0.0"]
+    listenAddresses: []
+    # Refuse SFTP subsystem requests.
+    disableSFTP: false
+    # Allow clients to set arbitrary environment variables.
+    allowAnyEnv: false
+
+  # Embedded SOCKS5 server.
+  esocks5:
+    enabled: false
+    port: 1080
+    # Addresses the SOCKS5 server listens on. e.g. ["0.0.0.0"]
+    listenAddresses: []
+
+  dns:
+    # Do not apply the Cluster private DNS at all.
+    disabled: false
+    local:
+      # Run the local DNS server. Always on in container mode.
+      enabled: false
+      # Listen address, either "IP" or "IP:port". e.g. "0.0.0.0:53"
+      listenAddress: ""
+    # Route every DNS query to the Cluster DNS instead of only the ones for the
+    # Cluster domain. Implies local.enabled.
+    full: false
+
+  network:
+    # Layer-3 mode: "v4", "v6" or "both". Empty lets the Cluster decide.
+    ipMode: ""
+    # Tunnel MTU. 0 uses the negotiated default. Maximum 1500.
+    mtu: 0
+    # Tunnel keepalive in seconds. 0 uses the default of 30.
+    keepAliveSeconds: 0
+    # Tunneling mode: "wireguard" (default) or "quicv0" (experimental).
+    tunnelMode: ""
+    # Force the datapath implementation: "kernel", "tun" or "gvisor". Empty lets
+    # the client pick the best mode it has permissions for. Use "gvisor" to run
+    # fully unprivileged without NET_ADMIN.
+    implementation: ""
+
+  # Enable dev mode. For development and testing only.
+  dev: false
+  # Skip TLS verification. For testing only, never against a production Cluster.
+  insecureTLS: false
+
+  # Extra arguments appended to `octelium connect`.
+  # e.g. ["--no-dns"]
+  extraArgs: []
+
+  # Extra environment variables, in Kubernetes env format.
+  # e.g. [{name: OCTELIUM_SKIP_MESSAGES, value: "true"}]
+  extraEnv: []
+  # Extra envFrom sources, in Kubernetes envFrom format.
+  extraEnvFrom: []
+
+# A Kubernetes Service exposing the published Services, eSSH and eSOCKS5 to
+# in-cluster Workloads.
+service:
+  enabled: false
+  type: ClusterIP
+  # Explicit clusterIP. Use "None" for a headless Service.
+  clusterIP: ""
   annotations: {}
-  # The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
+  labels: {}
+  # Only used when type is LoadBalancer.
+  loadBalancerIP: ""
+  loadBalancerSourceRanges: []
+  # One of Cluster or Local. Only used by LoadBalancer and NodePort.
+  externalTrafficPolicy: ""
+  # One of ClientIP or None.
+  sessionAffinity: ""
+  # Additional ports appended to the generated ones, in Kubernetes port format.
+  extraPorts: []
+
+serviceAccount:
+  # Create a dedicated ServiceAccount for the connector.
+  create: true
+  # Automount Kubernetes API credentials. The connector never talks to the
+  # Kubernetes API, so this stays off even for assertion based authentication,
+  # which uses a dedicated projected token instead.
+  automount: false
+  annotations: {}
+  labels: {}
+  # Name of the ServiceAccount to use. Generated when empty and create is true.
   name: ""
 
-# This is for setting Kubernetes Annotations to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/annotations/
 podAnnotations: {}
-# This is for setting Kubernetes Labels to a Pod.
-# For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
 
-podSecurityContext: {}
-  # fsGroup: 2000
+# Roll the Pods automatically when the chart managed Secret changes.
+rollOnSecretChange: true
 
-# The client needs NET_ADMIN to set up its tunnel interface. Where this is not
-# permitted, it falls back to its userspace implementation when possible.
+podSecurityContext:
+  # The client needs uid 0 for the NET_ADMIN capability to land in its effective
+  # set. Set runAsNonRoot true together with octelium.network.implementation
+  # "gvisor" and an empty capabilities list to run fully unprivileged.
+  runAsNonRoot: false
+  runAsUser: 0
+  runAsGroup: 0
+  fsGroup: 0
+  seccompProfile:
+    type: RuntimeDefault
+
 securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
   capabilities:
+    # NET_ADMIN lets the client set up its tunnel interface. Drop it and set
+    # octelium.network.implementation to "gvisor" to run without any capability.
+    drop: ["ALL"]
     add: ["NET_ADMIN"]
 
-resources: {}
-  # We usually recommend not to specify default resources and to leave this as a conscious
-  # choice for the user. This also increases chances charts run on environments with little
-  # resources, such as Minikube. If you do want to specify resources, uncomment the following
-  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
-  # limits:
-  #   cpu: 100m
-  #   memory: 128Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+# Requests only by default so the connector is schedulable without risking
+# throttling or OOM kills. Add limits that match your traffic profile.
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
 
-# This section is for setting up autoscaling more information can be found here: https://kubernetes.io/docs/concepts/workloads/autoscaling/
+# Probes in Kubernetes probe format. Disabled by default because the client
+# exposes no health endpoint. With eSSH or eSOCKS5 enabled a TCP probe works:
+#   readinessProbe:
+#     tcpSocket:
+#       port: esocks5
+#     initialDelaySeconds: 10
+livenessProbe: {}
+readinessProbe: {}
+startupProbe: {}
+
+# Container lifecycle hooks in Kubernetes format.
+lifecycle: {}
+
 autoscaling:
   enabled: false
   minReplicas: 1
-  maxReplicas: 100
+  maxReplicas: 10
   targetCPUUtilizationPercentage: 80
-  # targetMemoryUtilizationPercentage: 80
+  # Set to a value above 0 to also scale on memory.
+  targetMemoryUtilizationPercentage: 0
+  # HorizontalPodAutoscaler scaling behavior.
+  behavior: {}
+
+podDisruptionBudget:
+  enabled: false
+  # maxUnavailable takes precedence when it is not empty, otherwise minAvailable
+  # is used. Both accept an integer or a percentage string such as "50%".
+  minAvailable: 1
+  maxUnavailable: ""
+  # unhealthyPodEvictionPolicy requires Kubernetes 1.27 or newer.
+  unhealthyPodEvictionPolicy: ""
+
+# Writable volumes mounted over the read-only root filesystem. The Octelium home
+# holds the Session state database.
+emptyDirVolumes:
+  octeliumHome:
+    # Directory exported as OCTELIUM_HOME.
+    mountPath: /var/lib/octelium
+    medium: ""
+    sizeLimit: ""
+  tmp:
+    mountPath: /tmp
+    medium: ""
+    sizeLimit: ""
+
+# Extra volumes and mounts, in Kubernetes format. Use these to hand the client a
+# JWT for the jwt assertion type, or to pass /dev/net/tun through for the "tun"
+# implementation mode.
+extraVolumes: []
+extraVolumeMounts: []
+
+# Extra init containers and sidecars, in Kubernetes container format.
+initContainers: []
+extraContainers: []
 
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
+schedulerName: ""
+runtimeClassName: ""
 
-
-octelium:
-  # The Octelium Cluster domain. Required.
-  domain: ""
-
-  # An authentication token passed directly. The chart stores it in a Secret
-  # that it creates and manages. Mutually exclusive with authTokenSecret.
-  authToken: ""
-
-  # The name of an existing Kubernetes Secret that holds the authentication
-  # token. Takes precedence over authToken when both are set.
-  authTokenSecret: ""
-  # The key within authTokenSecret that holds the token.
-  authTokenSecretKey: "data"
-
-  # Enable dev mode. Intended for development and testing.
-  dev: false
-  # Disable TLS verification. For testing only; do not use against production Clusters.
-  insecureTLS: false
-
-  # Secret-less authentication using the Cluster's assertion-based IdentityProvider.
-  # Used only when neither authToken nor authTokenSecret is set.
-  assertion:
-    enabled: false
-    # The assertion type as configured on your Cluster. Verify the exact value
-    # against your Octelium docs/CLI (for example the Kubernetes assertion type).
-    type: "kubernetes"
-    # Optional audience override for the assertion.
-    audience: ""
-
-  # Extra arguments passed to `octelium connect`.
-  args: []
-  # Services to serve from this cluster.
-  serve: []
+# Share the node network namespace. Lets the tunnel serve the whole node, and
+# requires the implementation mode to be "kernel" or "tun".
+hostNetwork: false
+# One of ClusterFirst, ClusterFirstWithHostNet, Default or None. Defaults to
+# ClusterFirstWithHostNet when hostNetwork is true, otherwise ClusterFirst.
+dnsPolicy: ""
+# Pod DNS configuration, in Kubernetes format.
+dnsConfig: {}
+hostAliases: []

@@ -1,0 +1,15 @@
+octelium:
+  domain: example.com
+  auth:
+    token: ci-dummy-token
+  serveAll: true
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 8
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

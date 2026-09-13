@@ -3,8 +3,13 @@ apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
   name: {{ include "octelium.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "octelium.labels" . | nindent 4 }}
+  {{- with (include "octelium.annotations" .) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
@@ -13,7 +18,7 @@ spec:
   minReplicas: {{ .Values.autoscaling.minReplicas }}
   maxReplicas: {{ .Values.autoscaling.maxReplicas }}
   metrics:
-    {{- if .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if gt (int .Values.autoscaling.targetCPUUtilizationPercentage) 0 }}
     - type: Resource
       resource:
         name: cpu
@@ -21,7 +26,7 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
     {{- end }}
-    {{- if .Values.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- if gt (int .Values.autoscaling.targetMemoryUtilizationPercentage) 0 }}
     - type: Resource
       resource:
         name: memory
@@ -29,4 +34,8 @@ spec:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetMemoryUtilizationPercentage }}
     {{- end }}
+  {{- with .Values.autoscaling.behavior }}
+  behavior:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 {{- end }}

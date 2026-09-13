@@ -1,0 +1,35 @@
+octelium:
+  domain: example.com
+  auth:
+    assertion:
+      enabled: true
+      type: jwt
+      jwt:
+        file: /var/run/secrets/octelium/token
+  network:
+    implementation: gvisor
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  privileged: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+    add: []
+
+extraVolumes:
+  - name: assertion
+    secret:
+      secretName: octelium-assertion
+extraVolumeMounts:
+  - name: assertion
+    mountPath: /var/run/secrets/octelium
+    readOnly: true

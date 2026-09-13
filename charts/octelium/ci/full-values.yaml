@@ -1,0 +1,68 @@
+octelium:
+  domain: example.com
+  auth:
+    existingSecret: octelium-auth
+    scopes:
+      - service:svc1.ns1
+      - service:ns2/*
+  serve:
+    - svc1
+  publish:
+    - service: postgres
+      port: 5432
+    - service: redis.data
+      port: 6379
+      address: 0.0.0.0
+      name: redis
+  essh:
+    enabled: true
+    listenAddresses: ["0.0.0.0"]
+    disableSFTP: true
+  esocks5:
+    enabled: true
+    listenAddresses: ["0.0.0.0"]
+  dns:
+    local:
+      enabled: true
+      listenAddress: "0.0.0.0:5353"
+  network:
+    ipMode: both
+    mtu: 1380
+    keepAliveSeconds: 25
+  extraArgs:
+    - --no-dns
+  extraEnv:
+    - name: OCTELIUM_SKIP_MESSAGES
+      value: "true"
+
+replicaCount: 2
+
+service:
+  enabled: true
+  type: ClusterIP
+  annotations:
+    example.com/managed: "true"
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: kubernetes.io/hostname
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/name: octelium
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 512Mi
+
+commonLabels:
+  example.com/team: networking
+commonAnnotations:
+  example.com/owner: platform

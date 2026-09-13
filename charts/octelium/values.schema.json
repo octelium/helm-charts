@@ -3,13 +3,79 @@
   "title": "Octelium Helm chart values",
   "type": "object",
   "additionalProperties": false,
+  "definitions": {
+    "quantity": {
+      "type": [
+        "string",
+        "integer",
+        "null"
+      ]
+    },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "stringMap": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "objectArray": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "emptyDir": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mountPath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "medium": {
+          "type": "string",
+          "enum": [
+            "",
+            "Memory"
+          ]
+        },
+        "sizeLimit": {
+          "type": "string"
+        }
+      }
+    }
+  },
   "properties": {
     "global": {
       "type": "object"
     },
-    "replicaCount": {
-      "type": "integer",
-      "minimum": 0
+    "nameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "fullnameOverride": {
+      "type": "string",
+      "maxLength": 63
+    },
+    "commonLabels": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "commonAnnotations": {
+      "$ref": "#/definitions/stringMap"
     },
     "image": {
       "type": "object",
@@ -19,12 +85,20 @@
           "type": "string",
           "minLength": 1
         },
-        "pullPolicy": {
-          "type": "string",
-          "enum": ["Always", "Never", "IfNotPresent"]
-        },
         "tag": {
           "type": "string"
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^$|^sha256:[a-f0-9]{64}$"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "Never",
+            "IfNotPresent"
+          ]
         }
       }
     },
@@ -33,19 +107,349 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["name"],
+        "required": [
+          "name"
+        ],
         "properties": {
           "name": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         }
       }
     },
-    "nameOverride": {
-      "type": "string"
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0
     },
-    "fullnameOverride": {
-      "type": "string"
+    "revisionHistoryLimit": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "updateStrategy": {
+      "type": "object"
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "octelium": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "auth": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "token": {
+              "type": "string"
+            },
+            "existingSecret": {
+              "type": "string"
+            },
+            "existingSecretKey": {
+              "type": "string"
+            },
+            "logout": {
+              "type": "boolean"
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "assertion": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "kubernetes",
+                    "jwt",
+                    "azure",
+                    "github-actions"
+                  ]
+                },
+                "identityProvider": {
+                  "type": "string"
+                },
+                "audience": {
+                  "type": "string"
+                },
+                "projectedToken": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "expirationSeconds": {
+                      "type": "integer",
+                      "minimum": 600,
+                      "maximum": 4294967296
+                    },
+                    "mountPath": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "jwt": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "file": {
+                      "type": "string"
+                    },
+                    "env": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "serve": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "serveAll": {
+          "type": "boolean"
+        },
+        "publish": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "service",
+              "port"
+            ],
+            "properties": {
+              "service": {
+                "type": "string",
+                "minLength": 1
+              },
+              "port": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 65535
+              },
+              "address": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string",
+                "maxLength": 15,
+                "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$"
+              }
+            }
+          }
+        },
+        "essh": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "user": {
+              "type": "string"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "listenAddresses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "disableSFTP": {
+              "type": "boolean"
+            },
+            "allowAnyEnv": {
+              "type": "boolean"
+            }
+          }
+        },
+        "esocks5": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535
+            },
+            "listenAddresses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "disabled": {
+              "type": "boolean"
+            },
+            "full": {
+              "type": "boolean"
+            },
+            "local": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                },
+                "listenAddress": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ipMode": {
+              "type": "string",
+              "enum": [
+                "",
+                "v4",
+                "v6",
+                "both"
+              ]
+            },
+            "mtu": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1500
+            },
+            "keepAliveSeconds": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "tunnelMode": {
+              "type": "string",
+              "enum": [
+                "",
+                "wg",
+                "wireguard",
+                "quicv0"
+              ]
+            },
+            "implementation": {
+              "type": "string",
+              "enum": [
+                "",
+                "kernel",
+                "tun",
+                "gvisor"
+              ]
+            }
+          }
+        },
+        "dev": {
+          "type": "boolean"
+        },
+        "insecureTLS": {
+          "type": "boolean"
+        },
+        "extraArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extraEnv": {
+          "$ref": "#/definitions/env"
+        },
+        "extraEnvFrom": {
+          "$ref": "#/definitions/objectArray"
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer",
+            "ExternalName"
+          ]
+        },
+        "clusterIP": {
+          "type": "string"
+        },
+        "annotations": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "labels": {
+          "$ref": "#/definitions/stringMap"
+        },
+        "loadBalancerIP": {
+          "type": "string"
+        },
+        "loadBalancerSourceRanges": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "externalTrafficPolicy": {
+          "type": "string",
+          "enum": [
+            "",
+            "Cluster",
+            "Local"
+          ]
+        },
+        "sessionAffinity": {
+          "type": "string",
+          "enum": [
+            "",
+            "ClientIP",
+            "None"
+          ]
+        },
+        "extraPorts": {
+          "$ref": "#/definitions/objectArray"
+        }
+      }
     },
     "serviceAccount": {
       "type": "object",
@@ -58,27 +462,25 @@
           "type": "boolean"
         },
         "annotations": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
+          "$ref": "#/definitions/stringMap"
+        },
+        "labels": {
+          "$ref": "#/definitions/stringMap"
         },
         "name": {
-          "type": "string"
+          "type": "string",
+          "maxLength": 253
         }
       }
     },
     "podAnnotations": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      }
+      "$ref": "#/definitions/stringMap"
     },
     "podLabels": {
-      "type": "object",
-      "additionalProperties": {
-        "type": "string"
-      }
+      "$ref": "#/definitions/stringMap"
+    },
+    "rollOnSecretChange": {
+      "type": "boolean"
     },
     "podSecurityContext": {
       "type": "object"
@@ -87,6 +489,18 @@
       "type": "object"
     },
     "resources": {
+      "type": "object"
+    },
+    "livenessProbe": {
+      "type": "object"
+    },
+    "readinessProbe": {
+      "type": "object"
+    },
+    "startupProbe": {
+      "type": "object"
+    },
+    "lifecycle": {
       "type": "object"
     },
     "autoscaling": {
@@ -106,98 +520,105 @@
         },
         "targetCPUUtilizationPercentage": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 100
         },
         "targetMemoryUtilizationPercentage": {
           "type": "integer",
-          "minimum": 1,
+          "minimum": 0,
           "maximum": 100
+        },
+        "behavior": {
+          "type": "object"
         }
       }
     },
-    "nodeSelector": {
+    "podDisruptionBudget": {
       "type": "object",
-      "additionalProperties": {
-        "type": "string"
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "minAvailable": {
+          "$ref": "#/definitions/quantity"
+        },
+        "maxUnavailable": {
+          "$ref": "#/definitions/quantity"
+        },
+        "unhealthyPodEvictionPolicy": {
+          "type": "string",
+          "enum": [
+            "",
+            "IfHealthyBudget",
+            "AlwaysAllow"
+          ]
+        }
       }
     },
-    "tolerations": {
-      "type": "array",
-      "items": {
-        "type": "object"
+    "emptyDirVolumes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "octeliumHome": {
+          "$ref": "#/definitions/emptyDir"
+        },
+        "tmp": {
+          "$ref": "#/definitions/emptyDir"
+        }
       }
+    },
+    "extraVolumes": {
+      "$ref": "#/definitions/objectArray"
+    },
+    "extraVolumeMounts": {
+      "$ref": "#/definitions/objectArray"
+    },
+    "initContainers": {
+      "$ref": "#/definitions/objectArray"
+    },
+    "extraContainers": {
+      "$ref": "#/definitions/objectArray"
+    },
+    "nodeSelector": {
+      "$ref": "#/definitions/stringMap"
+    },
+    "tolerations": {
+      "$ref": "#/definitions/objectArray"
     },
     "affinity": {
       "type": "object"
     },
-    "octelium": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "domain": {
-          "type": "string"
-        },
-        "authToken": {
-          "type": "string"
-        },
-        "authTokenSecret": {
-          "type": "string"
-        },
-        "authTokenSecretKey": {
-          "type": "string"
-        },
-        "dev": {
-          "type": "boolean"
-        },
-        "insecureTLS": {
-          "type": "boolean"
-        },
-        "assertion": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "enabled": {
-              "type": "boolean"
-            },
-            "type": {
-              "type": "string"
-            },
-            "audience": {
-              "type": "string"
-            }
-          }
-        },
-        "args": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "serve": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "allOf": [
-        {
-          "not": {
-            "required": ["authToken", "authTokenSecret"],
-            "properties": {
-              "authToken": {
-                "type": "string",
-                "minLength": 1
-              },
-              "authTokenSecret": {
-                "type": "string",
-                "minLength": 1
-              }
-            }
-          }
-        }
+    "topologySpreadConstraints": {
+      "$ref": "#/definitions/objectArray"
+    },
+    "priorityClassName": {
+      "type": "string"
+    },
+    "schedulerName": {
+      "type": "string"
+    },
+    "runtimeClassName": {
+      "type": "string"
+    },
+    "hostNetwork": {
+      "type": "boolean"
+    },
+    "dnsPolicy": {
+      "type": "string",
+      "enum": [
+        "",
+        "ClusterFirst",
+        "ClusterFirstWithHostNet",
+        "Default",
+        "None"
       ]
+    },
+    "dnsConfig": {
+      "type": "object"
+    },
+    "hostAliases": {
+      "$ref": "#/definitions/objectArray"
     }
   }
 }

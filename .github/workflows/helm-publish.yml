@@ -1,5 +1,7 @@
 name: Helm Publish
 
+permissions: {}
+
 on:
   push:
     branches: [main]
@@ -13,72 +15,98 @@ concurrency:
   group: helm-publish
   cancel-in-progress: false
 
+env:
+  CHART_DIR: charts/octelium
+  REGISTRY: ghcr.io
+
 jobs:
   publish:
-    runs-on: ubuntu-latest
+    name: Package, push and sign
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
       id-token: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Check out code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Set up Helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
 
       - name: Set up ORAS
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Log in to GHCR for OCI clients
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log in to GHCR for Helm
-        run: |
-          set -euo pipefail
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+        uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
       - name: Read chart metadata
         id: chart
+        env:
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          meta="$(helm show chart charts/octelium)"
+          meta="$(helm show chart "$CHART_DIR")"
           name="$(printf '%s\n' "$meta" | awk '/^name:/ {print $2; exit}')"
           version="$(printf '%s\n' "$meta" | awk '/^version:/ {print $2; exit}')"
-          owner="$(printf '%s' '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          app_version="$(printf '%s\n' "$meta" | awk '/^appVersion:/ {gsub(/"/,"",$2); print $2; exit}')"
+          owner="$(printf '%s' "$REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
 
-          if [ -z "$name" ] || [ -z "$version" ]; then
-            echo "::error::could not read name/version from charts/octelium/Chart.yaml"
+          if [ -z "$name" ] || [ -z "$version" ] || [ -z "$app_version" ]; then
+            echo "::error file=$CHART_DIR/Chart.yaml::could not read name, version or appVersion"
             exit 1
           fi
 
-          echo "name=$name" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "owner=$owner" >> "$GITHUB_OUTPUT"
-          echo "repo=ghcr.io/$owner/helm-charts/$name" >> "$GITHUB_OUTPUT"
-          echo "helm_repo=oci://ghcr.io/$owner/helm-charts/$name" >> "$GITHUB_OUTPUT"
-          echo "helm_push_repo=oci://ghcr.io/$owner/helm-charts" >> "$GITHUB_OUTPUT"
-          echo "Chart: $name $version"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'; then
+            echo "::error file=$CHART_DIR/Chart.yaml::chart version \"$version\" is not valid semver"
+            exit 1
+          fi
+
+          {
+            echo "name=$name"
+            echo "version=$version"
+            echo "app_version=$app_version"
+            echo "repo=$REGISTRY/$owner/helm-charts/$name"
+            echo "helm_repo=oci://$REGISTRY/$owner/helm-charts/$name"
+            echo "helm_push_repo=oci://$REGISTRY/$owner/helm-charts"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Chart $name $version (appVersion $app_version)"
 
       - name: Lint
-        run: helm lint charts/octelium
+        run: helm lint --strict "$CHART_DIR" -f "$CHART_DIR/ci/default-values.yaml"
 
-      - name: Template smoke test
+      - name: Render every values set
         run: |
           set -euo pipefail
-          helm template charts/octelium \
-            --set octelium.domain=example.com \
-            --set octelium.authToken=dummy > /dev/null
+          for values in "$CHART_DIR"/ci/*-values.yaml; do
+            helm template release "$CHART_DIR" -f "$values" > /dev/null
+          done
 
-      - name: Check Artifact Hub metadata
+      - name: Log in to the registry for OCI clients
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$REGISTRY_TOKEN" | oras login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+          printf '%s' "$REGISTRY_TOKEN" | helm registry login "$REGISTRY" -u "$REGISTRY_USER" --password-stdin
+
+      - name: Check the appVersion image exists
+        env:
+          APP_VERSION: ${{ steps.chart.outputs.app_version }}
+        run: |
+          set -euo pipefail
+          image="$REGISTRY/octelium/octelium:$APP_VERSION"
+          if ! oras manifest fetch --descriptor "$image" > /dev/null; then
+            echo "::error file=$CHART_DIR/Chart.yaml::the client image $image does not exist"
+            exit 1
+          fi
+          echo "Verified $image"
+
+      - name: Check Artifact Hub repository metadata
         run: |
           set -euo pipefail
           test -f artifacthub-repo.yml
@@ -86,18 +114,22 @@ jobs:
           grep -q '^owners:' artifacthub-repo.yml
 
       - name: Push Artifact Hub repository metadata
+        env:
+          CHART_REPO: ${{ steps.chart.outputs.repo }}
         run: |
           set -euo pipefail
-          oras push \
-            "${{ steps.chart.outputs.repo }}:artifacthub.io" \
+          oras push "$CHART_REPO:artifacthub.io" \
             --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
             artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
 
-      - name: Check if already published
+      - name: Check whether this version is already published
         id: exists
+        env:
+          HELM_REPO: ${{ steps.chart.outputs.helm_repo }}
+          CHART_VERSION: ${{ steps.chart.outputs.version }}
         run: |
           set -euo pipefail
-          if helm show chart "${{ steps.chart.outputs.helm_repo }}" --version "${{ steps.chart.outputs.version }}" >/dev/null 2>&1; then
+          if helm show chart "$HELM_REPO" --version "$CHART_VERSION" >/dev/null 2>&1; then
             echo "published=true" >> "$GITHUB_OUTPUT"
           else
             echo "published=false" >> "$GITHUB_OUTPUT"
@@ -106,17 +138,23 @@ jobs:
       - name: Package and push
         id: push
         if: steps.exists.outputs.published == 'false'
+        env:
+          CHART_NAME: ${{ steps.chart.outputs.name }}
+          CHART_VERSION: ${{ steps.chart.outputs.version }}
+          HELM_PUSH_REPO: ${{ steps.chart.outputs.helm_push_repo }}
         run: |
           set -euo pipefail
           mkdir -p dist
-          helm package charts/octelium --destination dist
-          out="$(helm push \
-            "dist/${{ steps.chart.outputs.name }}-${{ steps.chart.outputs.version }}.tgz" \
-            "${{ steps.chart.outputs.helm_push_repo }}" 2>&1)"
-          echo "$out"
+          helm package "$CHART_DIR" --destination dist
+
+          package="dist/$CHART_NAME-$CHART_VERSION.tgz"
+          test -f "$package"
+          sha256sum "$package"
+
+          out="$(helm push "$package" "$HELM_PUSH_REPO" 2>&1)"
+          printf '%s\n' "$out"
 
           digest="$(printf '%s\n' "$out" | awk '/[Dd]igest:/ {print $NF; exit}')"
-
           if ! printf '%s' "$digest" | grep -Eq '^sha256:[a-f0-9]{64}$'; then
             echo "::error::invalid or missing pushed digest: $digest"
             exit 1
@@ -124,24 +162,49 @@ jobs:
 
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      - name: Sign chart
+      - name: Sign the chart
         if: steps.exists.outputs.published == 'false'
+        env:
+          CHART_REPO: ${{ steps.chart.outputs.repo }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
-          ref="${{ steps.chart.outputs.repo }}@${{ steps.push.outputs.digest }}"
-          cosign sign --yes "$ref"
-          echo "Published and signed ${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          cosign sign --yes "$CHART_REPO@$DIGEST"
 
-      - name: Verify chart signature
+      - name: Verify the signature
         if: steps.exists.outputs.published == 'false'
+        env:
+          CHART_REPO: ${{ steps.chart.outputs.repo }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          WORKFLOW_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/helm-publish.yml@${{ github.ref }}
         run: |
           set -euo pipefail
-          ref="${{ steps.chart.outputs.repo }}@${{ steps.push.outputs.digest }}"
-          cosign verify "$ref" \
+          cosign verify "$CHART_REPO@$DIGEST" \
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
-            --certificate-identity "https://github.com/${{ github.repository }}/.github/workflows/helm-publish.yml@refs/heads/main"
+            --certificate-identity "$WORKFLOW_IDENTITY" > /dev/null
+          echo "Signature verified"
 
-      - name: Skip
-        if: steps.exists.outputs.published == 'true'
+      - name: Summary
+        env:
+          CHART_NAME: ${{ steps.chart.outputs.name }}
+          CHART_VERSION: ${{ steps.chart.outputs.version }}
+          APP_VERSION: ${{ steps.chart.outputs.app_version }}
+          CHART_REPO: ${{ steps.chart.outputs.repo }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+          PUBLISHED: ${{ steps.exists.outputs.published }}
         run: |
-          echo "${{ steps.chart.outputs.name }} ${{ steps.chart.outputs.version }} is already published; Artifact Hub metadata was refreshed." >> "$GITHUB_STEP_SUMMARY"
+          set -euo pipefail
+          {
+            echo "## $CHART_NAME $CHART_VERSION"
+            echo
+            echo "- appVersion: \`$APP_VERSION\`"
+            if [ "$PUBLISHED" = "true" ]; then
+              echo "- Already published. Artifact Hub metadata was refreshed."
+            else
+              echo "- Pushed and signed as \`$CHART_REPO@$DIGEST\`"
+              echo
+              echo '```bash'
+              echo "helm install octelium oci://$CHART_REPO --version $CHART_VERSION"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

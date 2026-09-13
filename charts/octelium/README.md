@@ -1,108 +1,326 @@
-# Octelium Helm Chart
+# Octelium
 
-This chart runs the Octelium client in your Kubernetes cluster as a Deployment. It connects the cluster to your Octelium Cluster and can optionally serve in-cluster Kubernetes Services as Octelium Services.
+Run the [Octelium](https://octelium.com) client as a Deployment in Kubernetes.
 
-## Installation
+A single release gives you a **connector**: a long lived `octelium connect` process that joins your Octelium Cluster and, depending on how you configure it, can
 
-A minimal install using an authentication token:
+- **serve** in-cluster Kubernetes Services to the Octelium Cluster, so that Users and Workloads anywhere reach them through Octelium policy enforcement;
+- **publish** remote Octelium Services inside the Kubernetes cluster, so that your Pods reach them over plain `ClusterIP` addresses;
+- expose an **embedded SSH** (eSSH) and **SOCKS5** (eSOCKS5) server;
+- act as a **DNS forwarder** for the Cluster domain.
 
-```bash
-helm install my-octelium oci://ghcr.io/octelium/helm-charts/octelium \
-  --set octelium.domain=<DOMAIN> \
-  --set octelium.authToken=<AUTHENTICATION_TOKEN>
-```
-
-When you pass `authToken`, the chart stores it in a Kubernetes Secret that it creates and manages.
-
-### Using an existing Secret
-
-To reference a token from a Secret you already manage, use `authTokenSecret`:
+## TL;DR
 
 ```bash
-helm install my-octelium oci://ghcr.io/octelium/helm-charts/octelium \
-  --set octelium.domain=<DOMAIN> \
-  --set octelium.authTokenSecret=<K8S_SECRET_NAME>
+helm install octelium oci://ghcr.io/octelium/helm-charts/octelium \
+  --namespace octelium --create-namespace \
+  --set octelium.domain=<CLUSTER_DOMAIN> \
+  --set octelium.auth.token=<AUTHENTICATION_TOKEN>
 ```
 
-The Secret key defaults to `data`. Override it with `authTokenSecretKey`:
+## Requirements
+
+- Kubernetes `>= 1.23`
+- Helm `>= 3.8` (OCI registry support)
+
+## Verifying the chart
+
+Every published chart is signed with [cosign](https://github.com/sigstore/cosign) in keyless mode from this repository's publish workflow:
 
 ```bash
-helm install my-octelium oci://ghcr.io/octelium/helm-charts/octelium \
-  --set octelium.domain=<DOMAIN> \
-  --set octelium.authTokenSecret=<K8S_SECRET_NAME> \
-  --set octelium.authTokenSecretKey=<KEY_NAME>
+cosign verify ghcr.io/octelium/helm-charts/octelium:<CHART_VERSION> \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/octelium/helm-charts/.github/workflows/helm-publish.yml@refs/heads/main
 ```
 
-`authTokenSecret` takes precedence over `authToken`, so set only one.
+## Authentication
 
-### Secret-less authentication (assertion)
+Exactly one of the three methods below must be configured, otherwise the chart refuses to render.
 
-Instead of a token, the client can authenticate using your Cluster's assertion-based IdentityProvider, which avoids storing any secret in the cluster. This is used only when neither `authToken` nor `authTokenSecret` is set:
+### Assertion based (recommended)
+
+The connector authenticates with a Kubernetes ServiceAccount token against an assertion based [IdentityProvider](https://octelium.com/docs/octelium/latest/management/core/identity-providers) on your Cluster. No secret is ever stored in the Kubernetes cluster.
 
 ```bash
-helm install my-octelium oci://ghcr.io/octelium/helm-charts/octelium \
-  --set octelium.domain=<DOMAIN> \
-  --set octelium.assertion.enabled=true \
-  --set octelium.assertion.type=<ASSERTION_TYPE>
+helm install octelium oci://ghcr.io/octelium/helm-charts/octelium \
+  --set octelium.domain=<CLUSTER_DOMAIN> \
+  --set octelium.auth.assertion.enabled=true \
+  --set octelium.auth.assertion.audience=<AUDIENCE>
 ```
 
-You can optionally override the audience:
+The token is a short lived, audience bound [projected ServiceAccount token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) that kubelet rotates automatically. It is mounted only for the connector container; Kubernetes API credentials are never automounted.
+
+Set `octelium.auth.assertion.identityProvider` when the Cluster has more than one IdentityProvider of that type.
+
+Other assertion types are supported too: `azure` and `github-actions` fetch the assertion from the platform metadata endpoint, and `jwt` reads it from a file or an environment variable you provide:
 
 ```bash
-  --set octelium.assertion.audience=<AUDIENCE>
+  --set octelium.auth.assertion.type=jwt \
+  --set octelium.auth.assertion.jwt.file=/var/run/secrets/my-token
 ```
 
-Read more about assertion-based IdentityProviders [here](https://octelium.com/docs/octelium/latest/management/core/identity-providers).
-
-## Serving Services
-
-Serve one or more in-cluster Services with `octelium.serve`:
+### Existing Secret
 
 ```bash
-helm install my-octelium oci://ghcr.io/octelium/helm-charts/octelium \
-  --set octelium.domain=<DOMAIN> \
-  --set octelium.authToken=<AUTHENTICATION_TOKEN> \
-  --set "octelium.serve={svc1}"
+helm install octelium oci://ghcr.io/octelium/helm-charts/octelium \
+  --set octelium.domain=<CLUSTER_DOMAIN> \
+  --set octelium.auth.existingSecret=<SECRET_NAME> \
+  --set octelium.auth.existingSecretKey=data
 ```
 
-Multiple Services:
+### Inline Token
 
 ```bash
-  --set "octelium.serve={svc1,svc2,svc3}"
+  --set octelium.auth.token=<AUTHENTICATION_TOKEN>
 ```
 
-## Extra arguments
+The chart stores it in a Secret it creates and manages, and rolls the Pods whenever that Secret changes. Note that a value passed this way also ends up in the Helm release metadata, so prefer one of the two methods above.
 
-Pass any additional `octelium connect` flags via `octelium.args`:
+## Serving in-cluster Services to the Cluster
 
 ```bash
-  --set "octelium.args={--no-dns}"
+  --set "octelium.serve={svc1,svc2.ns1}"
 ```
 
-## Values
+Or everything assigned to the User:
 
-| Key | Default | Description |
-| --- | --- | --- |
-| `octelium.domain` | `""` | Octelium Cluster domain. Required. |
-| `octelium.authToken` | `""` | Token value; stored in a chart-managed Secret. |
-| `octelium.authTokenSecret` | `""` | Name of an existing Secret holding the token. Takes precedence over `authToken`. |
-| `octelium.authTokenSecretKey` | `"data"` | Key within `authTokenSecret`. |
-| `octelium.assertion.enabled` | `false` | Use assertion-based auth when no token is set. |
-| `octelium.assertion.type` | `"kubernetes"` | Assertion type configured on the Cluster. |
-| `octelium.assertion.audience` | `""` | Optional audience override. |
-| `octelium.dev` | `false` | Enable dev mode. |
-| `octelium.insecureTLS` | `false` | Disable TLS verification (testing only). |
-| `octelium.serve` | `[]` | Services to serve. |
-| `octelium.args` | `[]` | Extra `octelium connect` arguments. |
-| `replicaCount` | `1` | Number of replicas (ignored when autoscaling is enabled). |
-| `image.repository` | `ghcr.io/octelium/octelium` | Image repository. |
-| `image.tag` | `""` (chart appVersion) | Image tag. |
-| `image.pullPolicy` | `IfNotPresent` | Image pull policy. |
-| `resources` | `{}` | Pod resource requests/limits. |
-| `autoscaling.enabled` | `false` | Enable the HorizontalPodAutoscaler. |
+```bash
+  --set octelium.serveAll=true
+```
 
-The standard `serviceAccount`, `nodeSelector`, `tolerations`, `affinity`, `podSecurityContext`, and `securityContext` keys are also supported.
+## Publishing Cluster Services inside Kubernetes
+
+`octelium.publish` maps remote Octelium Services onto ports of the connector Pod. Enable `service.enabled` to put a `ClusterIP` Service in front of them so the rest of the Kubernetes cluster can reach them by name.
+
+```yaml
+octelium:
+  domain: example.com
+  publish:
+    - service: postgres
+      port: 5432
+    - service: redis.data
+      port: 6379
+      name: redis
+
+service:
+  enabled: true
+```
+
+Your Pods then connect to `octelium.<namespace>.svc.cluster.local:5432` and `:6379`.
+
+Each entry defaults to listening on `0.0.0.0` so that other Pods can reach it. Set `address` explicitly to narrow it down.
+
+## eSSH and eSOCKS5
+
+```yaml
+octelium:
+  essh:
+    enabled: true
+    listenAddresses: ["0.0.0.0"]
+  esocks5:
+    enabled: true
+    listenAddresses: ["0.0.0.0"]
+
+service:
+  enabled: true
+```
+
+Without `listenAddresses` both servers bind to the Pod loopback only and nothing outside the Pod can reach them.
 
 ## Networking privileges
 
-The container is granted the `NET_ADMIN` capability so the client can set up its tunnel interface. If your nodes restrict this, the client falls back to its userspace implementation where possible.
+By default the container runs with every capability dropped except `NET_ADMIN`, which the client needs to create its tunnel interface. Because Kubernetes does not grant ambient capabilities, `NET_ADMIN` is only effective for uid 0, so the Pod runs as root with `allowPrivilegeEscalation: false`, a read-only root filesystem and the `RuntimeDefault` seccomp profile.
+
+To run **fully unprivileged** as a non-root user, switch the client to its userspace network stack:
+
+```yaml
+octelium:
+  network:
+    implementation: gvisor
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+securityContext:
+  capabilities:
+    drop: ["ALL"]
+    add: []
+```
+
+This mode fits the serve and publish use cases. It cannot provide tunnel connectivity to the rest of the Pod's network namespace, and it is slower than the kernel WireGuard datapath.
+
+The `tun` implementation mode additionally needs `/dev/net/tun`, which you can pass through with `extraVolumes`/`extraVolumeMounts` on a cluster that allows `hostPath`.
+
+## Scaling
+
+Each replica is an independent Octelium Session and Device, so replicas scale the serve and publish paths horizontally. The default update strategy is `Recreate` so a rollout never runs two connectors for the same configuration at once; set `updateStrategy.type=RollingUpdate` if brief overlap is preferable to brief downtime for your workload.
+
+## Values
+
+### Chart wide
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `nameOverride` | string | `""` | Override the chart name used in resource names. |
+| `fullnameOverride` | string | `""` | Override the generated resource name entirely. |
+| `commonLabels` | object | `{}` | Labels added to every rendered resource. |
+| `commonAnnotations` | object | `{}` | Annotations added to every rendered resource. |
+
+### Image
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `image.repository` | string | `ghcr.io/octelium/octelium` | Client image. |
+| `image.tag` | string | `""` | Defaults to the chart `appVersion`. |
+| `image.digest` | string | `""` | Pin by digest. Takes precedence over `tag`. |
+| `image.pullPolicy` | string | `IfNotPresent` | `Always`, `IfNotPresent` or `Never`. |
+| `imagePullSecrets` | list | `[]` | Pull secrets for a private registry. |
+
+### Octelium
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `octelium.domain` | string | `""` | Cluster domain. **Required.** |
+| `octelium.auth.token` | string | `""` | Authentication Token stored in a chart managed Secret. |
+| `octelium.auth.existingSecret` | string | `""` | Name of an existing Secret holding the Token. |
+| `octelium.auth.existingSecretKey` | string | `data` | Key inside `existingSecret`. |
+| `octelium.auth.logout` | bool | `true` | Log the Session out on shutdown. |
+| `octelium.auth.scopes` | list | `[]` | Restrict the Session, e.g. `["service:svc1.ns1"]`. |
+| `octelium.auth.assertion.enabled` | bool | `false` | Use assertion based authentication. |
+| `octelium.auth.assertion.type` | string | `kubernetes` | `kubernetes`, `jwt`, `azure` or `github-actions`. |
+| `octelium.auth.assertion.identityProvider` | string | `""` | IdentityProvider name or UID. |
+| `octelium.auth.assertion.audience` | string | `""` | Assertion audience. |
+| `octelium.auth.assertion.projectedToken.enabled` | bool | `true` | Use a projected ServiceAccount token instead of the automounted one. |
+| `octelium.auth.assertion.projectedToken.expirationSeconds` | int | `3600` | Projected token lifetime. |
+| `octelium.auth.assertion.projectedToken.mountPath` | string | `/var/run/secrets/octelium.com/serviceaccount` | Where the token is projected. |
+| `octelium.auth.assertion.jwt.file` | string | `""` | JWT file path, for the `jwt` type. |
+| `octelium.auth.assertion.jwt.env` | string | `""` | JWT environment variable, for the `jwt` type. |
+| `octelium.serve` | list | `[]` | Services served to the Cluster. |
+| `octelium.serveAll` | bool | `false` | Serve every Service assigned to the User. |
+| `octelium.publish` | list | `[]` | Remote Services published on the Pod. Entries take `service`, `port`, optional `address` and `name`. |
+| `octelium.essh.enabled` | bool | `false` | Run the embedded SSH server. |
+| `octelium.essh.user` | string | `""` | Force a host user for eSSH sessions. |
+| `octelium.essh.port` | int | `22022` | eSSH port. |
+| `octelium.essh.listenAddresses` | list | `[]` | eSSH listen addresses. |
+| `octelium.essh.disableSFTP` | bool | `false` | Refuse SFTP subsystem requests. |
+| `octelium.essh.allowAnyEnv` | bool | `false` | Let clients set arbitrary environment variables. |
+| `octelium.esocks5.enabled` | bool | `false` | Run the embedded SOCKS5 server. |
+| `octelium.esocks5.port` | int | `1080` | eSOCKS5 port. |
+| `octelium.esocks5.listenAddresses` | list | `[]` | eSOCKS5 listen addresses. |
+| `octelium.dns.disabled` | bool | `false` | Do not apply the Cluster private DNS. |
+| `octelium.dns.local.enabled` | bool | `false` | Run the local DNS server. |
+| `octelium.dns.local.listenAddress` | string | `""` | Local DNS listen address, `IP` or `IP:port`. |
+| `octelium.dns.full` | bool | `false` | Route every DNS query to the Cluster DNS. |
+| `octelium.network.ipMode` | string | `""` | `v4`, `v6` or `both`. |
+| `octelium.network.mtu` | int | `0` | Tunnel MTU, up to `1500`. |
+| `octelium.network.keepAliveSeconds` | int | `0` | Tunnel keepalive. `0` uses the default of 30. |
+| `octelium.network.tunnelMode` | string | `""` | `wireguard` or `quicv0` (experimental). |
+| `octelium.network.implementation` | string | `""` | `kernel`, `tun` or `gvisor`. |
+| `octelium.dev` | bool | `false` | Dev mode. |
+| `octelium.insecureTLS` | bool | `false` | Skip TLS verification. Testing only. |
+| `octelium.extraArgs` | list | `[]` | Extra `octelium connect` arguments. |
+| `octelium.extraEnv` | list | `[]` | Extra environment variables. |
+| `octelium.extraEnvFrom` | list | `[]` | Extra `envFrom` sources. |
+
+### Workload
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `replicaCount` | int | `1` | Replicas. Ignored when autoscaling is enabled. |
+| `revisionHistoryLimit` | int | `10` | ReplicaSets retained for rollback. |
+| `updateStrategy` | object | `{type: Recreate}` | Deployment update strategy. |
+| `terminationGracePeriodSeconds` | int | `30` | Shutdown grace period. |
+| `resources` | object | requests `50m` / `64Mi` | Container resources. |
+| `livenessProbe` | object | `{}` | Liveness probe. |
+| `readinessProbe` | object | `{}` | Readiness probe. |
+| `startupProbe` | object | `{}` | Startup probe. |
+| `lifecycle` | object | `{}` | Container lifecycle hooks. |
+| `podAnnotations` | object | `{}` | Extra Pod annotations. |
+| `podLabels` | object | `{}` | Extra Pod labels. |
+| `rollOnSecretChange` | bool | `true` | Roll Pods when the chart managed Secret changes. |
+| `podSecurityContext` | object | see `values.yaml` | Pod security context. |
+| `securityContext` | object | see `values.yaml` | Container security context. |
+| `emptyDirVolumes.octeliumHome` | object | `/var/lib/octelium` | Writable state directory, exported as `OCTELIUM_HOME`. |
+| `emptyDirVolumes.tmp` | object | `/tmp` | Writable temporary directory. |
+| `extraVolumes` | list | `[]` | Extra volumes. |
+| `extraVolumeMounts` | list | `[]` | Extra volume mounts. |
+| `initContainers` | list | `[]` | Extra init containers. |
+| `extraContainers` | list | `[]` | Sidecar containers. |
+| `hostNetwork` | bool | `false` | Share the node network namespace. |
+| `dnsPolicy` | string | `""` | Pod DNS policy. |
+| `dnsConfig` | object | `{}` | Pod DNS configuration. |
+| `hostAliases` | list | `[]` | Extra `/etc/hosts` entries. |
+
+### Scheduling and availability
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `nodeSelector` | object | `{}` | Node selector. |
+| `tolerations` | list | `[]` | Tolerations. |
+| `affinity` | object | `{}` | Affinity rules. |
+| `topologySpreadConstraints` | list | `[]` | Topology spread constraints. |
+| `priorityClassName` | string | `""` | PriorityClass. |
+| `schedulerName` | string | `""` | Alternative scheduler. |
+| `runtimeClassName` | string | `""` | RuntimeClass. |
+| `autoscaling.enabled` | bool | `false` | Create a HorizontalPodAutoscaler. |
+| `autoscaling.minReplicas` | int | `1` | Minimum replicas. |
+| `autoscaling.maxReplicas` | int | `10` | Maximum replicas. |
+| `autoscaling.targetCPUUtilizationPercentage` | int | `80` | CPU target. `0` disables. |
+| `autoscaling.targetMemoryUtilizationPercentage` | int | `0` | Memory target. `0` disables. |
+| `autoscaling.behavior` | object | `{}` | HPA scaling behavior. |
+| `podDisruptionBudget.enabled` | bool | `false` | Create a PodDisruptionBudget. |
+| `podDisruptionBudget.minAvailable` | int/string | `1` | Minimum available Pods. Used when `maxUnavailable` is empty. |
+| `podDisruptionBudget.maxUnavailable` | int/string | `""` | Maximum unavailable Pods. Takes precedence over `minAvailable`. |
+| `podDisruptionBudget.unhealthyPodEvictionPolicy` | string | `""` | Requires Kubernetes `>= 1.27`. |
+
+### Service and ServiceAccount
+
+| Key | Type | Default | Description |
+| --- | --- | --- | --- |
+| `service.enabled` | bool | `false` | Expose published Services, eSSH and eSOCKS5. |
+| `service.type` | string | `ClusterIP` | Service type. |
+| `service.clusterIP` | string | `""` | Explicit cluster IP. `None` for headless. |
+| `service.annotations` | object | `{}` | Service annotations. |
+| `service.labels` | object | `{}` | Service labels. |
+| `service.loadBalancerIP` | string | `""` | LoadBalancer IP. |
+| `service.loadBalancerSourceRanges` | list | `[]` | Allowed source ranges. |
+| `service.externalTrafficPolicy` | string | `""` | `Cluster` or `Local`. |
+| `service.sessionAffinity` | string | `""` | `ClientIP` or `None`. |
+| `service.extraPorts` | list | `[]` | Additional Service ports. |
+| `serviceAccount.create` | bool | `true` | Create a dedicated ServiceAccount. |
+| `serviceAccount.automount` | bool | `false` | Automount Kubernetes API credentials. |
+| `serviceAccount.annotations` | object | `{}` | ServiceAccount annotations. |
+| `serviceAccount.labels` | object | `{}` | ServiceAccount labels. |
+| `serviceAccount.name` | string | `""` | ServiceAccount name. |
+
+## Upgrading from 0.x to 1.0.0
+
+`1.0.0` reorganizes the `octelium.*` values. Unknown keys are rejected by `values.schema.json`, so an upgrade that still uses the old names fails fast instead of silently dropping settings.
+
+| 0.x | 1.0.0 |
+| --- | --- |
+| `octelium.authToken` | `octelium.auth.token` |
+| `octelium.authTokenSecret` | `octelium.auth.existingSecret` |
+| `octelium.authTokenSecretKey` | `octelium.auth.existingSecretKey` |
+| `octelium.assertion.enabled` | `octelium.auth.assertion.enabled` |
+| `octelium.assertion.type` | `octelium.auth.assertion.type` |
+| `octelium.assertion.audience` | `octelium.auth.assertion.audience` |
+| `octelium.args` | `octelium.extraArgs` |
+| `octelium.serve` | `octelium.serve` (unchanged) |
+
+Other behavior changes in `1.0.0`:
+
+- **An authentication method is now mandatory.** Previously a release with no Token and no assertion rendered a Pod that could never authenticate.
+- **`serviceAccount.automount` now defaults to `false`.** Assertion based authentication uses a dedicated projected token instead of the automounted API credentials. If your Cluster IdentityProvider requires the legacy token, set `octelium.auth.assertion.projectedToken.enabled=false` together with `serviceAccount.automount=true`.
+- **`octelium.assertion.audience` now takes effect for the `kubernetes` type.** In `0.x` it was silently ignored.
+- **The root filesystem is read-only** and the state directory moved to the `OCTELIUM_HOME` emptyDir at `/var/lib/octelium`.
+- **The default update strategy is `Recreate`** instead of `RollingUpdate`.
+- **The ServiceAccount is no longer created when `serviceAccount.create=false`.** In `0.x` a truthiness bug created it anyway.
+- **Default resource requests are set** (`50m` CPU, `64Mi` memory).
+
+## License
+
+Apache-2.0. See [LICENSE](https://github.com/octelium/helm-charts/blob/main/LICENSE).
