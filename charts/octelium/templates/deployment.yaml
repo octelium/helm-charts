@@ -3,7 +3,7 @@
 {{- if and .Values.rollOnSecretChange (include "octelium.createsSecret" .) -}}
 {{- $_ := set $podAnnotations "checksum/auth-secret" (include (print $.Template.BasePath "/secret.yaml") . | sha256sum) -}}
 {{- end -}}
-{{- $podAnnotations = merge $podAnnotations .Values.podAnnotations .Values.commonAnnotations -}}
+{{- $podAnnotations = merge $podAnnotations (include "octelium.annotationsWith" (dict "ctx" . "extra" .Values.podAnnotations) | fromYaml) -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -34,10 +34,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       labels:
-        {{- include "octelium.labels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        {{- include "octelium.labelsWith" (dict "ctx" . "extra" .Values.podLabels) | nindent 8 }}
     spec:
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
@@ -97,7 +94,7 @@ spec:
             - {{ printf "--serve=%s" . | quote }}
             {{- end }}
             {{- range .Values.octelium.publish }}
-            - {{ printf "--publish=%s:%s:%v" .service (default "0.0.0.0" .address) .port | quote }}
+            - {{ include "octelium.publishArg" . | quote }}
             {{- end }}
             {{- if .Values.octelium.essh.enabled }}
             - --essh
@@ -226,7 +223,7 @@ spec:
               mountPath: {{ .Values.emptyDirVolumes.octeliumHome.mountPath | quote }}
             - name: tmp
               mountPath: {{ .Values.emptyDirVolumes.tmp.mountPath | quote }}
-            {{- if and .Values.octelium.auth.assertion.enabled (eq .Values.octelium.auth.assertion.type "kubernetes") .Values.octelium.auth.assertion.projectedToken.enabled }}
+            {{- if include "octelium.usesProjectedToken" . }}
             - name: octelium-assertion
               mountPath: {{ .Values.octelium.auth.assertion.projectedToken.mountPath | quote }}
               readOnly: true
@@ -242,7 +239,7 @@ spec:
           emptyDir: {{- include "octelium.emptyDirSpec" .Values.emptyDirVolumes.octeliumHome | nindent 12 }}
         - name: tmp
           emptyDir: {{- include "octelium.emptyDirSpec" .Values.emptyDirVolumes.tmp | nindent 12 }}
-        {{- if and .Values.octelium.auth.assertion.enabled (eq .Values.octelium.auth.assertion.type "kubernetes") .Values.octelium.auth.assertion.projectedToken.enabled }}
+        {{- if include "octelium.usesProjectedToken" . }}
         - name: octelium-assertion
           projected:
             defaultMode: 0400

@@ -27,6 +27,8 @@ env:
   CHART_DIR: charts/octelium
   UPSTREAM_REPO: octelium/octelium
   CLIENT_IMAGE: ghcr.io/octelium/octelium
+  HELM_VERSION: v3.19.0
+  ORAS_VERSION: 1.3.4
 
 jobs:
   sync:
@@ -44,9 +46,13 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
 
       - name: Set up ORAS
         uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
 
       - name: Resolve the target version
         id: resolve

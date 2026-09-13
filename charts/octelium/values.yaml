@@ -32,10 +32,14 @@ replicaCount: 1
 # Number of old ReplicaSets retained for rollback.
 revisionHistoryLimit: 10
 
-# Deployment update strategy. Recreate is the default because a rolling update
-# would otherwise run two connectors for the same Device at once.
+# Deployment update strategy. A surge without unavailability keeps published
+# Services reachable across a rollout. Switch to Recreate when the connector
+# binds fixed host ports, for example together with hostNetwork.
 updateStrategy:
-  type: Recreate
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 0
+    maxSurge: 1
 
 # Grace period given to the client to tear its tunnel down on shutdown.
 terminationGracePeriodSeconds: 30
@@ -80,7 +84,8 @@ octelium:
         # relying on the legacy automounted API credentials. Keep this enabled
         # unless the Cluster IdentityProvider requires the default token.
         enabled: true
-        # Token lifetime in seconds. kubelet rotates the token before expiry.
+        # Token lifetime in seconds, between 600 and 86400. kubelet rotates the
+        # token before expiry.
         expirationSeconds: 3600
         # Directory the token is projected into.
         mountPath: "/var/run/secrets/octelium.com/serviceaccount"
@@ -108,14 +113,19 @@ octelium:
 
   # Publish remote Octelium Services on this Pod so that in-cluster Workloads
   # can reach them. Set service.enabled to expose them through a Kubernetes
-  # Service. address defaults to 0.0.0.0 so other Pods can connect.
+  # Service. address defaults to 0.0.0.0 so other Pods can connect, and protocol
+  # defaults to TCP and must match the type of the Octelium Service.
   # e.g.
   #   - service: svc1
   #     port: 8080
   #   - service: svc2.ns1
   #     port: 9090
   #     address: 0.0.0.0
+  #     protocol: TCP
   #     name: svc2
+  #   - service: dns1
+  #     port: 5353
+  #     protocol: UDP
   publish: []
 
   # Embedded SSH server.
@@ -124,7 +134,9 @@ octelium:
     # Force a host user for eSSH sessions. Only works when running as root.
     user: ""
     port: 22022
-    # Addresses the eSSH server listens on. e.g. ["0.0.0.0"]
+    # Addresses the eSSH server listens on. When empty the client binds only its
+    # Octelium tunnel addresses, which a Kubernetes Service cannot route to.
+    # Set ["0.0.0.0"] to accept in-cluster clients. e.g. ["0.0.0.0"]
     listenAddresses: []
     # Refuse SFTP subsystem requests.
     disableSFTP: false
@@ -135,16 +147,22 @@ octelium:
   esocks5:
     enabled: false
     port: 1080
-    # Addresses the SOCKS5 server listens on. e.g. ["0.0.0.0"]
+    # Addresses the SOCKS5 server listens on. When empty the client binds only
+    # its Octelium tunnel addresses, which a Kubernetes Service cannot route to.
+    # Set ["0.0.0.0"] to accept in-cluster clients. e.g. ["0.0.0.0"]
     listenAddresses: []
 
   dns:
     # Do not apply the Cluster private DNS at all.
     disabled: false
     local:
-      # Run the local DNS server. Always on in container mode.
+      # Run the local DNS server. The client always runs it in container mode,
+      # so this only controls the explicit --localdns flag.
       enabled: false
-      # Listen address, either "IP" or "IP:port". e.g. "0.0.0.0:53"
+      # Listen address, either "IP" or "IP:port", IPv6 bracketed when it carries
+      # a port. Required before the server can be exposed through the Kubernetes
+      # Service, because the client otherwise binds 127.0.0.100:53 on Linux.
+      # e.g. "0.0.0.0:53"
       listenAddress: ""
     # Route every DNS query to the Cluster DNS instead of only the ones for the
     # Cluster domain. Implies local.enabled.
@@ -173,7 +191,8 @@ octelium:
   # e.g. ["--no-dns"]
   extraArgs: []
 
-  # Extra environment variables, in Kubernetes env format.
+  # Extra environment variables, in Kubernetes env format. They cannot redefine
+  # OCTELIUM_DOMAIN, OCTELIUM_HOME or OCTELIUM_AUTH_TOKEN.
   # e.g. [{name: OCTELIUM_SKIP_MESSAGES, value: "true"}]
   extraEnv: []
   # Extra envFrom sources, in Kubernetes envFrom format.
@@ -291,7 +310,8 @@ emptyDirVolumes:
 
 # Extra volumes and mounts, in Kubernetes format. Use these to hand the client a
 # JWT for the jwt assertion type, or to pass /dev/net/tun through for the "tun"
-# implementation mode.
+# implementation mode. The names octelium-home, tmp and octelium-assertion are
+# reserved by the chart.
 extraVolumes: []
 extraVolumeMounts: []
 

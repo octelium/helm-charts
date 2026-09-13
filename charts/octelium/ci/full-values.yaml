@@ -14,6 +14,10 @@ octelium:
       port: 6379
       address: 0.0.0.0
       name: redis
+    - service: coredns.data
+      port: 5354
+      protocol: UDP
+      name: coredns
   essh:
     enabled: true
     listenAddresses: ["0.0.0.0"]

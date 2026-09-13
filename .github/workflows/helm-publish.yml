@@ -18,10 +18,17 @@ concurrency:
 env:
   CHART_DIR: charts/octelium
   REGISTRY: ghcr.io
+  HELM_VERSION: v3.19.0
+  ORAS_VERSION: 1.3.4
 
 jobs:
+  validate:
+    name: Validate
+    uses: ./.github/workflows/validate.yml
+
   publish:
     name: Package, push and sign
+    needs: validate
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -35,12 +42,26 @@ jobs:
 
       - name: Set up Helm
         uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: ${{ env.HELM_VERSION }}
 
       - name: Set up ORAS
         uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d # v2.0.1
+        with:
+          version: ${{ env.ORAS_VERSION }}
 
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Refuse to publish from outside main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::publishing is only allowed from refs/heads/main, got $REF"
+            exit 1
+          fi
 
       - name: Read chart metadata
         id: chart

@@ -22,7 +22,7 @@ Services served to the Cluster:
 
 Octelium Services published inside this Kubernetes cluster:
 {{- range .Values.octelium.publish }}
-  - {{ .service }} on port {{ .port }}
+  - {{ .service }} on port {{ .port }}/{{ default "TCP" .protocol }}
 {{- end }}
 {{- if .Values.service.enabled }}
 
@@ -37,14 +37,15 @@ them to the rest of the Kubernetes cluster.
 {{- end }}
 {{- if and .Values.octelium.essh.enabled (not .Values.octelium.essh.listenAddresses) }}
 
-WARNING: eSSH is enabled but octelium.essh.listenAddresses is empty, so it only
-listens on the Pod loopback. Set it to ["0.0.0.0"] to accept in-cluster clients.
+WARNING: eSSH is enabled but octelium.essh.listenAddresses is empty, so it binds
+only the Octelium tunnel addresses and no in-cluster client can reach it. Set it
+to ["0.0.0.0"] to accept in-cluster clients.
 {{- end }}
 {{- if and .Values.octelium.esocks5.enabled (not .Values.octelium.esocks5.listenAddresses) }}
 
 WARNING: eSOCKS5 is enabled but octelium.esocks5.listenAddresses is empty, so it
-only listens on the Pod loopback. Set it to ["0.0.0.0"] to accept in-cluster
-clients.
+binds only the Octelium tunnel addresses and no in-cluster client can reach it.
+Set it to ["0.0.0.0"] to accept in-cluster clients.
 {{- end }}
 {{- if .Values.octelium.auth.token }}
 

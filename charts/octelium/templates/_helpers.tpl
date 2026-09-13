@@ -31,23 +31,6 @@ Create chart name and version as used by the chart label.
 {{- end }}
 
 {{/*
-Common labels
-*/}}
-{{- define "octelium.labels" -}}
-helm.sh/chart: {{ include "octelium.chart" . }}
-{{ include "octelium.selectorLabels" . }}
-{{- if .Chart.AppVersion }}
-app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
-{{- end }}
-app.kubernetes.io/component: connector
-app.kubernetes.io/part-of: octelium
-app.kubernetes.io/managed-by: {{ .Release.Service }}
-{{- with .Values.commonLabels }}
-{{ toYaml . }}
-{{- end }}
-{{- end }}
-
-{{/*
 Selector labels
 */}}
 {{- define "octelium.selectorLabels" -}}
@@ -56,12 +39,48 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
-Common annotations
+Labels the chart owns. They always win over user supplied labels so that the
+Deployment selector invariant cannot be broken and no duplicate key is emitted.
 */}}
-{{- define "octelium.annotations" -}}
-{{- with .Values.commonAnnotations }}
-{{- toYaml . }}
+{{- define "octelium.ownedLabels" -}}
+helm.sh/chart: {{ include "octelium.chart" . }}
+{{ include "octelium.selectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
+app.kubernetes.io/component: connector
+app.kubernetes.io/part-of: octelium
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+{{- end }}
+
+{{/*
+Labels for a resource. Takes a dict of "ctx" and an optional "extra" map of
+resource specific labels.
+*/}}
+{{- define "octelium.labelsWith" -}}
+{{- $ctx := .ctx -}}
+{{- $labels := include "octelium.ownedLabels" $ctx | fromYaml -}}
+{{- toYaml (merge $labels (default (dict) .extra) $ctx.Values.commonLabels) -}}
+{{- end }}
+
+{{- define "octelium.labels" -}}
+{{- include "octelium.labelsWith" (dict "ctx" .) -}}
+{{- end }}
+
+{{/*
+Annotations for a resource. Takes a dict of "ctx" and an optional "extra" map of
+resource specific annotations, which win over commonAnnotations.
+*/}}
+{{- define "octelium.annotationsWith" -}}
+{{- $ctx := .ctx -}}
+{{- $annotations := merge (dict) (default (dict) .extra) $ctx.Values.commonAnnotations -}}
+{{- with $annotations -}}
+{{- toYaml . -}}
+{{- end -}}
+{{- end }}
+
+{{- define "octelium.annotations" -}}
+{{- include "octelium.annotationsWith" (dict "ctx" .) -}}
 {{- end }}
 
 {{/*
@@ -111,6 +130,16 @@ Whether the chart manages its own Secret for the authentication Token.
 {{- end }}
 
 {{/*
+Whether a projected ServiceAccount token is mounted for the assertion.
+*/}}
+{{- define "octelium.usesProjectedToken" -}}
+{{- $a := .Values.octelium.auth.assertion -}}
+{{- if and $a.enabled (eq $a.type "kubernetes") $a.projectedToken.enabled }}
+{{- print "true" }}
+{{- end }}
+{{- end }}
+
+{{/*
 Path of the projected ServiceAccount token used by the kubernetes assertion type.
 */}}
 {{- define "octelium.projectedTokenPath" -}}
@@ -150,13 +179,25 @@ The argument passed to `octelium connect --assertion`.
 {{- end }}
 
 {{/*
+The argument passed to `octelium connect --publish` for one entry. IPv6 listen
+addresses are bracketed because the client parses the value with net.SplitHostPort.
+*/}}
+{{- define "octelium.publishArg" -}}
+{{- $addr := default "0.0.0.0" .address -}}
+{{- if and (contains ":" $addr) (not (hasPrefix "[" $addr)) -}}
+{{- $addr = printf "[%s]" $addr -}}
+{{- end -}}
+{{- printf "--publish=%s:%s:%v" .service $addr .port -}}
+{{- end }}
+
+{{/*
 Ports exposed by the container and, when enabled, by the Kubernetes Service.
 */}}
 {{- define "octelium.portList" -}}
 {{- range $i, $p := .Values.octelium.publish }}
 - name: {{ default (printf "publish-%v" $p.port) $p.name | trunc 15 | trimSuffix "-" }}
   port: {{ $p.port }}
-  protocol: TCP
+  protocol: {{ default "TCP" $p.protocol }}
 {{- end }}
 {{- if .Values.octelium.essh.enabled }}
 - name: essh
@@ -207,11 +248,12 @@ Ports exposed by the container and, when enabled, by the Kubernetes Service.
 {{- end }}
 
 {{/*
-Reject value combinations that would deploy a Pod that cannot ever connect.
+Reject value combinations that would deploy a Pod that cannot ever connect, or a
+manifest the API server would reject.
 */}}
 {{- define "octelium.validateValues" -}}
 {{- $o := .Values.octelium -}}
-{{- if not $o.domain -}}
+{{- if not (trim $o.domain) -}}
 {{- fail "octelium.domain is required. Set it to your Octelium Cluster domain, e.g. --set octelium.domain=example.com" -}}
 {{- end -}}
 {{- if and $o.auth.token $o.auth.existingSecret -}}
@@ -247,8 +289,78 @@ Reject value combinations that would deploy a Pod that cannot ever connect.
 {{- fail (printf "octelium.publish[%d] is missing the port field" $i) -}}
 {{- end -}}
 {{- end -}}
+{{- include "octelium.validatePorts" . -}}
+{{- include "octelium.validateAutoscaling" . -}}
+{{- include "octelium.validateExtensions" . -}}
 {{- if and $.Values.podSecurityContext.runAsNonRoot (has "NET_ADMIN" (dig "capabilities" "add" (list) $.Values.securityContext)) -}}
-{{- fail "NET_ADMIN is only effective for uid 0. Either keep podSecurityContext.runAsNonRoot=false or drop NET_ADMIN and set octelium.network.implementation=gvisor" -}}
+{{- fail "NET_ADMIN is only effective for uid 0 because Kubernetes grants no ambient capabilities. Either keep podSecurityContext.runAsNonRoot=false or set securityContext.capabilities.add=[] together with octelium.network.implementation=gvisor" -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Every listener has to end up as a uniquely named port, and no two of them may
+share the same protocol and port number.
+*/}}
+{{- define "octelium.validatePorts" -}}
+{{- $names := list -}}
+{{- $tuples := list -}}
+{{- range $p := (include "octelium.portList" . | fromYamlArray) -}}
+{{- $tuple := printf "%s/%v" $p.protocol $p.port -}}
+{{- if has $tuple $tuples -}}
+{{- fail (printf "port %v/%s is claimed by more than one listener. Published Services, eSSH, eSOCKS5 and the local DNS server each need their own port" $p.port $p.protocol) -}}
+{{- end -}}
+{{- $tuples = append $tuples $tuple -}}
+{{- if has $p.name $names -}}
+{{- fail (printf "port name %q is used more than once. Give each octelium.publish entry a unique name" $p.name) -}}
+{{- end -}}
+{{- $names = append $names $p.name -}}
+{{- end -}}
+{{- if and .Values.octelium.dns.local.enabled .Values.octelium.dns.local.listenAddress -}}
+{{- $port := int (include "octelium.localDNSPort" .) -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "octelium.dns.local.listenAddress has an out of range port: %v" $port) -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{- define "octelium.validateAutoscaling" -}}
+{{- $a := .Values.autoscaling -}}
+{{- if $a.enabled -}}
+{{- if gt (int $a.minReplicas) (int $a.maxReplicas) -}}
+{{- fail (printf "autoscaling.minReplicas (%v) cannot be greater than autoscaling.maxReplicas (%v)" $a.minReplicas $a.maxReplicas) -}}
+{{- end -}}
+{{- if and (le (int $a.targetCPUUtilizationPercentage) 0) (le (int $a.targetMemoryUtilizationPercentage) 0) -}}
+{{- fail "autoscaling.enabled needs at least one of autoscaling.targetCPUUtilizationPercentage or autoscaling.targetMemoryUtilizationPercentage above 0. An empty metrics list makes Kubernetes fall back to its own default instead of disabling autoscaling" -}}
+{{- end -}}
+{{- $requests := dig "requests" (dict) (default (dict) .Values.resources) -}}
+{{- if not (get $requests "cpu") -}}
+{{- if gt (int $a.targetCPUUtilizationPercentage) 0 -}}
+{{- fail "autoscaling.targetCPUUtilizationPercentage needs resources.requests.cpu to be set, otherwise the HorizontalPodAutoscaler cannot compute utilization" -}}
+{{- end -}}
+{{- end -}}
+{{- if not (get $requests "memory") -}}
+{{- if gt (int $a.targetMemoryUtilizationPercentage) 0 -}}
+{{- fail "autoscaling.targetMemoryUtilizationPercentage needs resources.requests.memory to be set, otherwise the HorizontalPodAutoscaler cannot compute utilization" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end }}
+
+{{/*
+Extension points must not silently shadow anything the chart owns.
+*/}}
+{{- define "octelium.validateExtensions" -}}
+{{- $reservedVolumes := list "octelium-home" "tmp" "octelium-assertion" -}}
+{{- range $v := .Values.extraVolumes -}}
+{{- if has $v.name $reservedVolumes -}}
+{{- fail (printf "extraVolumes cannot use the chart owned volume name %q. Rename it, or point emptyDirVolumes at a different path" $v.name) -}}
+{{- end -}}
+{{- end -}}
+{{- $reservedEnv := list "OCTELIUM_DOMAIN" "OCTELIUM_HOME" "OCTELIUM_AUTH_TOKEN" -}}
+{{- range $e := .Values.octelium.extraEnv -}}
+{{- if has $e.name $reservedEnv -}}
+{{- fail (printf "octelium.extraEnv cannot redefine %q. Use octelium.domain, emptyDirVolumes.octeliumHome.mountPath or octelium.auth.* instead" $e.name) -}}
+{{- end -}}
 {{- end -}}
 {{- end }}
 

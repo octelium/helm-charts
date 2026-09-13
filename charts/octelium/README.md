@@ -18,6 +18,10 @@ helm install octelium oci://ghcr.io/octelium/helm-charts/octelium \
   --set octelium.auth.token=<AUTHENTICATION_TOKEN>
 ```
 
+Helm keeps every `--set` value in the release metadata, so for anything beyond a
+quick trial prefer [assertion based authentication](#assertion-based-recommended),
+which stores no secret at all, or an [existing Secret](#existing-secret).
+
 ## Requirements
 
 - Kubernetes `>= 1.23`
@@ -101,14 +105,21 @@ octelium:
     - service: redis.data
       port: 6379
       name: redis
+    - service: coredns
+      port: 5353
+      protocol: UDP
 
 service:
   enabled: true
 ```
 
-Your Pods then connect to `octelium.<namespace>.svc.cluster.local:5432` and `:6379`.
+Your Pods then connect to `octelium.<namespace>.svc.cluster.local:5432`, `:6379` and `:5353`.
 
-Each entry defaults to listening on `0.0.0.0` so that other Pods can reach it. Set `address` explicitly to narrow it down.
+Each entry defaults to listening on `0.0.0.0` so that other Pods can reach it. Set `address` explicitly to narrow it down; an IPv6 address is bracketed for you.
+
+`protocol` defaults to `TCP` and **must match the type of the Octelium Service**. The client binds a UDP listener for a UDP or DNS Service, so leaving a UDP Service at the default renders a Kubernetes TCP port that no traffic can traverse. The chart cannot infer this at render time because the Service type only becomes known once the connector reaches the Cluster.
+
+Two listeners may not claim the same protocol and port; the chart rejects the release rather than rendering a Service the API server would refuse.
 
 ## eSSH and eSOCKS5
 
@@ -125,7 +136,9 @@ service:
   enabled: true
 ```
 
-Without `listenAddresses` both servers bind to the Pod loopback only and nothing outside the Pod can reach them.
+`listenAddresses` is not optional for in-cluster access. Without it the client binds both servers to its **Octelium tunnel addresses**, which a Kubernetes Service cannot route to, so the Service would have no reachable endpoint.
+
+Note that the embedded SOCKS5 server performs no authentication of its own: anything that can reach the port proxies through the connector's Octelium identity. Keep it on `ClusterIP` behind a NetworkPolicy, and treat an eSSH session as full access to the connector container.
 
 ## Networking privileges
 
@@ -156,7 +169,11 @@ The `tun` implementation mode additionally needs `/dev/net/tun`, which you can p
 
 ## Scaling
 
-Each replica is an independent Octelium Session and Device, so replicas scale the serve and publish paths horizontally. The default update strategy is `Recreate` so a rollout never runs two connectors for the same configuration at once; set `updateStrategy.type=RollingUpdate` if brief overlap is preferable to brief downtime for your workload.
+Each replica is an independent Octelium Session and Device — the client generates a fresh device name per process — so replicas scale the serve and publish paths horizontally and a rollout is free to overlap them.
+
+The default update strategy is therefore `RollingUpdate` with `maxUnavailable: 0` and `maxSurge: 1`, which keeps published Services reachable across an upgrade. Switch to `Recreate` when the connector binds fixed host ports that two Pods cannot hold at once, which is the case with `hostNetwork: true`.
+
+Because the client exposes no health endpoint, a Pod is Ready as soon as it starts, before the tunnel is up. A Service can therefore route to a connector that is still connecting or reconnecting. Set `readinessProbe` yourself if you have a signal worth probing — a TCP probe against an eSSH or eSOCKS5 port is the closest available approximation.
 
 ## Values
 
@@ -194,24 +211,24 @@ Each replica is an independent Octelium Session and Device, so replicas scale th
 | `octelium.auth.assertion.identityProvider` | string | `""` | IdentityProvider name or UID. |
 | `octelium.auth.assertion.audience` | string | `""` | Assertion audience. |
 | `octelium.auth.assertion.projectedToken.enabled` | bool | `true` | Use a projected ServiceAccount token instead of the automounted one. |
-| `octelium.auth.assertion.projectedToken.expirationSeconds` | int | `3600` | Projected token lifetime. |
+| `octelium.auth.assertion.projectedToken.expirationSeconds` | int | `3600` | Projected token lifetime, `600`–`86400`. |
 | `octelium.auth.assertion.projectedToken.mountPath` | string | `/var/run/secrets/octelium.com/serviceaccount` | Where the token is projected. |
 | `octelium.auth.assertion.jwt.file` | string | `""` | JWT file path, for the `jwt` type. |
 | `octelium.auth.assertion.jwt.env` | string | `""` | JWT environment variable, for the `jwt` type. |
 | `octelium.serve` | list | `[]` | Services served to the Cluster. |
 | `octelium.serveAll` | bool | `false` | Serve every Service assigned to the User. |
-| `octelium.publish` | list | `[]` | Remote Services published on the Pod. Entries take `service`, `port`, optional `address` and `name`. |
+| `octelium.publish` | list | `[]` | Remote Services published on the Pod. Entries take `service`, `port`, optional `protocol` (`TCP`/`UDP`), `address` and `name`. |
 | `octelium.essh.enabled` | bool | `false` | Run the embedded SSH server. |
 | `octelium.essh.user` | string | `""` | Force a host user for eSSH sessions. |
 | `octelium.essh.port` | int | `22022` | eSSH port. |
-| `octelium.essh.listenAddresses` | list | `[]` | eSSH listen addresses. |
+| `octelium.essh.listenAddresses` | list | `[]` | eSSH listen addresses. Required for in-cluster access. |
 | `octelium.essh.disableSFTP` | bool | `false` | Refuse SFTP subsystem requests. |
 | `octelium.essh.allowAnyEnv` | bool | `false` | Let clients set arbitrary environment variables. |
 | `octelium.esocks5.enabled` | bool | `false` | Run the embedded SOCKS5 server. |
 | `octelium.esocks5.port` | int | `1080` | eSOCKS5 port. |
-| `octelium.esocks5.listenAddresses` | list | `[]` | eSOCKS5 listen addresses. |
+| `octelium.esocks5.listenAddresses` | list | `[]` | eSOCKS5 listen addresses. Required for in-cluster access. |
 | `octelium.dns.disabled` | bool | `false` | Do not apply the Cluster private DNS. |
-| `octelium.dns.local.enabled` | bool | `false` | Run the local DNS server. |
+| `octelium.dns.local.enabled` | bool | `false` | Pass `--localdns`. The client always runs the local DNS server in container mode. |
 | `octelium.dns.local.listenAddress` | string | `""` | Local DNS listen address, `IP` or `IP:port`. |
 | `octelium.dns.full` | bool | `false` | Route every DNS query to the Cluster DNS. |
 | `octelium.network.ipMode` | string | `""` | `v4`, `v6` or `both`. |
@@ -222,7 +239,7 @@ Each replica is an independent Octelium Session and Device, so replicas scale th
 | `octelium.dev` | bool | `false` | Dev mode. |
 | `octelium.insecureTLS` | bool | `false` | Skip TLS verification. Testing only. |
 | `octelium.extraArgs` | list | `[]` | Extra `octelium connect` arguments. |
-| `octelium.extraEnv` | list | `[]` | Extra environment variables. |
+| `octelium.extraEnv` | list | `[]` | Extra environment variables. Cannot redefine `OCTELIUM_DOMAIN`, `OCTELIUM_HOME` or `OCTELIUM_AUTH_TOKEN`. |
 | `octelium.extraEnvFrom` | list | `[]` | Extra `envFrom` sources. |
 
 ### Workload
@@ -231,7 +248,7 @@ Each replica is an independent Octelium Session and Device, so replicas scale th
 | --- | --- | --- | --- |
 | `replicaCount` | int | `1` | Replicas. Ignored when autoscaling is enabled. |
 | `revisionHistoryLimit` | int | `10` | ReplicaSets retained for rollback. |
-| `updateStrategy` | object | `{type: Recreate}` | Deployment update strategy. |
+| `updateStrategy` | object | `RollingUpdate`, surge 1, unavailable 0 | Deployment update strategy. |
 | `terminationGracePeriodSeconds` | int | `30` | Shutdown grace period. |
 | `resources` | object | requests `50m` / `64Mi` | Container resources. |
 | `livenessProbe` | object | `{}` | Liveness probe. |
@@ -245,7 +262,7 @@ Each replica is an independent Octelium Session and Device, so replicas scale th
 | `securityContext` | object | see `values.yaml` | Container security context. |
 | `emptyDirVolumes.octeliumHome` | object | `/var/lib/octelium` | Writable state directory, exported as `OCTELIUM_HOME`. |
 | `emptyDirVolumes.tmp` | object | `/tmp` | Writable temporary directory. |
-| `extraVolumes` | list | `[]` | Extra volumes. |
+| `extraVolumes` | list | `[]` | Extra volumes. `octelium-home`, `tmp` and `octelium-assertion` are reserved. |
 | `extraVolumeMounts` | list | `[]` | Extra volume mounts. |
 | `initContainers` | list | `[]` | Extra init containers. |
 | `extraContainers` | list | `[]` | Sidecar containers. |
@@ -281,7 +298,7 @@ Each replica is an independent Octelium Session and Device, so replicas scale th
 | Key | Type | Default | Description |
 | --- | --- | --- | --- |
 | `service.enabled` | bool | `false` | Expose published Services, eSSH and eSOCKS5. |
-| `service.type` | string | `ClusterIP` | Service type. |
+| `service.type` | string | `ClusterIP` | `ClusterIP`, `NodePort` or `LoadBalancer`. |
 | `service.clusterIP` | string | `""` | Explicit cluster IP. `None` for headless. |
 | `service.annotations` | object | `{}` | Service annotations. |
 | `service.labels` | object | `{}` | Service labels. |
@@ -317,7 +334,7 @@ Other behavior changes in `1.0.0`:
 - **`serviceAccount.automount` now defaults to `false`.** Assertion based authentication uses a dedicated projected token instead of the automounted API credentials. If your Cluster IdentityProvider requires the legacy token, set `octelium.auth.assertion.projectedToken.enabled=false` together with `serviceAccount.automount=true`.
 - **`octelium.assertion.audience` now takes effect for the `kubernetes` type.** In `0.x` it was silently ignored.
 - **The root filesystem is read-only** and the state directory moved to the `OCTELIUM_HOME` emptyDir at `/var/lib/octelium`.
-- **The default update strategy is `Recreate`** instead of `RollingUpdate`.
+- **The update strategy is `RollingUpdate` with `maxUnavailable: 0`**, so a rollout surges before it terminates.
 - **The ServiceAccount is no longer created when `serviceAccount.create=false`.** In `0.x` a truthiness bug created it anyway.
 - **Default resource requests are set** (`50m` CPU, `64Mi` memory).
 

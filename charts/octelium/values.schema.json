@@ -4,13 +4,6 @@
   "type": "object",
   "additionalProperties": false,
   "definitions": {
-    "quantity": {
-      "type": [
-        "string",
-        "integer",
-        "null"
-      ]
-    },
     "env": {
       "type": "array",
       "items": {
@@ -44,7 +37,8 @@
       "properties": {
         "mountPath": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "pattern": "^/"
         },
         "medium": {
           "type": "string",
@@ -57,6 +51,21 @@
           "type": "string"
         }
       }
+    },
+    "intOrPercent": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "string",
+          "pattern": "^$|^([0-9]|[1-9][0-9]|100)%$"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "properties": {
@@ -65,11 +74,13 @@
     },
     "nameOverride": {
       "type": "string",
-      "maxLength": 63
+      "maxLength": 63,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     },
     "fullnameOverride": {
       "type": "string",
-      "maxLength": 63
+      "maxLength": 63,
+      "pattern": "^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
     },
     "commonLabels": {
       "$ref": "#/definitions/stringMap"
@@ -195,11 +206,12 @@
                     "expirationSeconds": {
                       "type": "integer",
                       "minimum": 600,
-                      "maximum": 4294967296
+                      "maximum": 86400
                     },
                     "mountPath": {
                       "type": "string",
-                      "minLength": 1
+                      "minLength": 1,
+                      "pattern": "^/"
                     }
                   }
                 },
@@ -208,7 +220,8 @@
                   "additionalProperties": false,
                   "properties": {
                     "file": {
-                      "type": "string"
+                      "type": "string",
+                      "pattern": "^$|^/"
                     },
                     "env": {
                       "type": "string"
@@ -247,6 +260,13 @@
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 65535
+              },
+              "protocol": {
+                "type": "string",
+                "enum": [
+                  "TCP",
+                  "UDP"
+                ]
               },
               "address": {
                 "type": "string"
@@ -328,7 +348,8 @@
                   "type": "boolean"
                 },
                 "listenAddress": {
-                  "type": "string"
+                  "type": "string",
+                  "pattern": "^$|^[0-9.]+$|^[0-9.]+:[0-9]{1,5}$|^[0-9A-Fa-f:]+$|^\\[[0-9A-Fa-f:]+\\]:[0-9]{1,5}$"
                 }
               }
             }
@@ -408,8 +429,7 @@
           "enum": [
             "ClusterIP",
             "NodePort",
-            "LoadBalancer",
-            "ExternalName"
+            "LoadBalancer"
           ]
         },
         "clusterIP": {
@@ -541,10 +561,10 @@
           "type": "boolean"
         },
         "minAvailable": {
-          "$ref": "#/definitions/quantity"
+          "$ref": "#/definitions/intOrPercent"
         },
         "maxUnavailable": {
-          "$ref": "#/definitions/quantity"
+          "$ref": "#/definitions/intOrPercent"
         },
         "unhealthyPodEvictionPolicy": {
           "type": "string",

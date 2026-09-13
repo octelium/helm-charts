@@ -9,18 +9,10 @@ metadata:
   name: {{ include "octelium.fullname" . }}
   namespace: {{ .Release.Namespace }}
   labels:
-    {{- include "octelium.labels" . | nindent 4 }}
-    {{- with .Values.service.labels }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
-  {{- if or .Values.commonAnnotations .Values.service.annotations }}
+    {{- include "octelium.labelsWith" (dict "ctx" . "extra" .Values.service.labels) | nindent 4 }}
+  {{- with (include "octelium.annotationsWith" (dict "ctx" . "extra" .Values.service.annotations)) }}
   annotations:
-    {{- with (include "octelium.annotations" .) }}
     {{- . | nindent 4 }}
-    {{- end }}
-    {{- with .Values.service.annotations }}
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
   {{- end }}
 spec:
   type: {{ .Values.service.type }}

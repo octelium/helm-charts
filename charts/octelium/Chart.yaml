@@ -60,3 +60,11 @@ annotations:
       description: The ServiceAccount is no longer created when serviceAccount.create is false
     - kind: fixed
       description: Pods now roll automatically when the authentication token Secret changes
+    - kind: added
+      description: Published Services take a protocol so that UDP Services are exposed as UDP ports
+    - kind: fixed
+      description: Chart owned labels and annotations can no longer be shadowed into duplicate keys by commonLabels, podLabels or podAnnotations
+    - kind: fixed
+      description: IPv6 publish addresses are bracketed so the client can parse them
+    - kind: added
+      description: Validation for listener port collisions, autoscaling bounds, reserved volume and environment names, and tighter value schemas
