@@ -19,7 +19,8 @@ env:
   CHART_DIR: charts/octelium
   REGISTRY: ghcr.io
   HELM_VERSION: v3.19.0
-  ORAS_VERSION: 1.3.4
+  # Capped by the releases.json bundled in the pinned setup-oras action.
+  ORAS_VERSION: 1.3.3
 
 jobs:
   validate:
