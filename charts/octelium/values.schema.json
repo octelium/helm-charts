@@ -190,9 +190,6 @@
                     "github-actions"
                   ]
                 },
-                "identityProvider": {
-                  "type": "string"
-                },
                 "audience": {
                   "type": "string"
                 },

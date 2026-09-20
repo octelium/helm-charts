@@ -54,7 +54,7 @@ helm install octelium oci://ghcr.io/octelium/helm-charts/octelium \
 
 The token is a short lived, audience bound [projected ServiceAccount token](https://kubernetes.io/docs/concepts/storage/projected-volumes/#serviceaccounttoken) that kubelet rotates automatically. It is mounted only for the connector container; Kubernetes API credentials are never automounted.
 
-Set `octelium.auth.assertion.identityProvider` when the Cluster has more than one IdentityProvider of that type.
+The Cluster matches the assertion against its own IdentityProviders, so the chart does not need to name one even when several are configured.
 
 Other assertion types are supported too: `azure` and `github-actions` fetch the assertion from the platform metadata endpoint, and `jwt` reads it from a file or an environment variable you provide:
 
@@ -208,7 +208,6 @@ Because the client exposes no health endpoint, a Pod is Ready as soon as it star
 | `octelium.auth.scopes` | list | `[]` | Restrict the Session, e.g. `["service:svc1.ns1"]`. |
 | `octelium.auth.assertion.enabled` | bool | `false` | Use assertion based authentication. |
 | `octelium.auth.assertion.type` | string | `kubernetes` | `kubernetes`, `jwt`, `azure` or `github-actions`. |
-| `octelium.auth.assertion.identityProvider` | string | `""` | IdentityProvider name or UID. |
 | `octelium.auth.assertion.audience` | string | `""` | Assertion audience. |
 | `octelium.auth.assertion.projectedToken.enabled` | bool | `true` | Use a projected ServiceAccount token instead of the automounted one. |
 | `octelium.auth.assertion.projectedToken.expirationSeconds` | int | `3600` | Projected token lifetime, `600`–`86400`. |

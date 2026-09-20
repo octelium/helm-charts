@@ -68,10 +68,6 @@ octelium:
       # One of: kubernetes, jwt, azure, github-actions.
       type: "kubernetes"
 
-      # Name or UID of the IdentityProvider to authenticate against. Only needed
-      # when the Cluster has more than one IdentityProvider of this type.
-      identityProvider: ""
-
       # Audience bound into the assertion. For the kubernetes type this is the
       # audience of the projected ServiceAccount token and must match the
       # audience configured on the Cluster IdentityProvider. Leave empty to use

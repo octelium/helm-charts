@@ -171,11 +171,7 @@ The argument passed to `octelium connect --assertion`.
     {{- $arg = $a.type -}}
   {{- end -}}
 {{- end -}}
-{{- if $a.identityProvider -}}
-{{- printf "%s:%s" $a.identityProvider $arg -}}
-{{- else -}}
 {{- $arg -}}
-{{- end -}}
 {{- end }}
 
 {{/*
