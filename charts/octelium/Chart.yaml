@@ -2,8 +2,8 @@ apiVersion: v2
 name: octelium
 description: Run the Octelium client in Kubernetes to connect Workloads to an Octelium Cluster, publish remote Services in-cluster and serve in-cluster Services to the Cluster
 type: application
-version: 1.0.1
-appVersion: "0.43.0"
+version: 1.0.2
+appVersion: "0.44.0"
 kubeVersion: ">=1.23.0-0"
 icon: https://octelium.com/assets/logo-180-DUsurYDp.png
 home: https://octelium.com
@@ -33,7 +33,7 @@ annotations:
   artifacthub.io/containsSecurityUpdates: "false"
   artifacthub.io/images: |
     - name: octelium
-      image: ghcr.io/octelium/octelium:0.43.0
+      image: ghcr.io/octelium/octelium:0.44.0
   artifacthub.io/links: |
     - name: Documentation
       url: https://octelium.com/docs
@@ -45,4 +45,4 @@ annotations:
       url: https://github.com/octelium/octelium/issues
   artifacthub.io/changes: |
     - kind: changed
-      description: Updated the Octelium client from 0.42.0 to 0.43.0
+      description: Updated the Octelium client from 0.43.0 to 0.44.0
