@@ -2,7 +2,7 @@ apiVersion: v2
 name: octelium
 description: Run the Octelium client in Kubernetes to connect Workloads to an Octelium Cluster, publish remote Services in-cluster and serve in-cluster Services to the Cluster
 type: application
-version: 1.0.7
+version: 1.0.8
 appVersion: "0.50.0"
 kubeVersion: ">=1.23.0-0"
 icon: https://octelium.com/assets/logo-180-DUsurYDp.png
@@ -45,4 +45,4 @@ annotations:
       url: https://github.com/octelium/octelium/issues
   artifacthub.io/changes: |
     - kind: changed
-      description: Updated the Octelium client from 0.49.0 to 0.50.0
+      description: Updated the CI dependencies helm/chart-testing-action to 2.9.0, actions/setup-python to 7.1.0 and oras-project/setup-oras to 2.0.3
